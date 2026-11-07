@@ -22,3 +22,6 @@ process.env.DATABASE_URL = testUrl;
 process.env.ACCESS_TOKEN_SECRET ??= 'test_access_secret_at_least_32_characters_long';
 process.env.REFRESH_TOKEN_SECRET ??= 'test_refresh_secret_at_least_32_characters_long';
 process.env.CORS_ORIGINS ??= 'http://localhost:3000';
+// Secreto compartido backend → gateway para /internal/*. Los tests lo usan
+// como valor esperado del header X-Internal-Token.
+process.env.INTERNAL_TOKEN ??= 'test_internal_token_at_least_32_characters_long';

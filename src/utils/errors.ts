@@ -15,6 +15,7 @@ export type ErrorCode =
   | 'TICKET_INVALID'
   | 'TICKET_EXPIRED'
   | 'TICKET_ALREADY_USED'
+  | 'INTERNAL_UNAUTHORIZED'
   | 'UPSTREAM_ERROR';
 
 export interface ErrorDetail {
@@ -75,6 +76,12 @@ export const ticketExpired = () => new AppError('TICKET_EXPIRED', 401, 'Ticket e
 
 export const ticketAlreadyUsed = () =>
   new AppError('TICKET_ALREADY_USED', 409, 'El ticket ya fue usado');
+
+export const internalUnauthorized = () =>
+  new AppError('INTERNAL_UNAUTHORIZED', 401, 'No autorizado');
+
+export const validationError = (details?: ErrorDetail[]) =>
+  new AppError('VALIDATION_ERROR', 400, 'Datos inválidos', details);
 
 export const upstreamError = (message = 'El servicio upstream no respondió') =>
   new AppError('UPSTREAM_ERROR', 502, message);

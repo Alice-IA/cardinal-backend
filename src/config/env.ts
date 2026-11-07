@@ -27,6 +27,13 @@ const rawSchema = z.object({
     .refine((origins) => origins.length > 0, { message: 'CORS_ORIGINS no puede estar vacío' }),
   ACCESS_TOKEN_SECRET: secret('ACCESS_TOKEN_SECRET'),
   REFRESH_TOKEN_SECRET: secret('REFRESH_TOKEN_SECRET'),
+  // Secreto compartido con cardinal-gateway para autenticar /internal/*.
+  //
+  // Es el ÚNICO secreto que el gateway conoce. El `WS_TICKET_SECRET` (≥32
+  // bytes, pendiente de conectar cuando exista el store Redis) vive SOLO en
+  // el backend: el gateway ya no canjea tickets en proceso, los consume por
+  // HTTP contra /internal/tickets/consume. Tampoco tiene Redis.
+  INTERNAL_TOKEN: secret('INTERNAL_TOKEN'),
 });
 
 const parsed = rawSchema

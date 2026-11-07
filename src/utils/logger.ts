@@ -38,6 +38,10 @@ export const logger = pino({
       'req.headers.authorization',
       'req.headers.cookie',
       'res.headers["set-cookie"]',
+      // Secreto backend → gateway: nunca debe aparecer en un access log.
+      '["x-internal-token"]',
+      'req.headers["x-internal-token"]',
+      '*.headers["x-internal-token"]',
     ],
     censor: '[REDACTED]',
   },

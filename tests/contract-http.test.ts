@@ -3,9 +3,10 @@ import { buildControlPlaneApp } from '../src/control-plane/app';
 import { prisma } from '../src/config/prisma';
 import { resetDb } from './helpers/db';
 import { seedTenantFixture, type TenantFixture } from './helpers/fixtures';
+import { makeTicketDeps } from './helpers/ticket-deps';
 import { signAccessToken } from './helpers/tokens';
 
-const app = buildControlPlaneApp();
+const app = buildControlPlaneApp({ ticketDeps: makeTicketDeps() });
 let fixture: TenantFixture;
 let aliceToken: string;
 let bobToken: string;

@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildControlPlaneApp } from '../src/control-plane/app';
+import { makeTicketDeps } from './helpers/ticket-deps';
 
-const app = buildControlPlaneApp();
+const app = buildControlPlaneApp({ ticketDeps: makeTicketDeps() });
 
 const REQUIRED_PATHS = [
   '/api/agents',
@@ -54,6 +55,20 @@ describe('OpenAPI', () => {
     for (const path of REQUIRED_PATHS) {
       expect(paths, `falta documentar la ruta ${path}`).toHaveProperty(path);
     }
+  });
+
+  it('no documenta los endpoints internos /internal/*', async () => {
+    const document = await fetchDocument();
+    const paths = (document.paths ?? {}) as Record<string, unknown>;
+
+    // Los endpoints internos se autentican con X-Internal-Token, no con
+    // bearerAuth, y no forman parte de la API pública: no deben filtrarse al
+    // OpenAPI que consume el dashboard.
+    const internalPaths = Object.keys(paths).filter((path) => path.startsWith('/internal'));
+
+    expect(internalPaths, 'los endpoints internos no deben aparecer en el OpenAPI público').toEqual(
+      [],
+    );
   });
 
   it('cada endpoint no público declara security bearerAuth', async () => {
