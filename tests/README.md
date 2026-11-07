@@ -6,10 +6,11 @@ sandbox **antes** de implementar la lógica de negocio. Los stubs deben estar
 tests de regresión de auth deben estar **verdes contra la app Express real**
 (la regresión todavía no corre contra Fastify, ver más abajo).
 
-Estado de la corrida: **43 rojos** (gateway/control plane/openapi/sandbox y
-las 2 garantías de DB de ownership), **61 verdes** (24 auth originales + 24
-regression-auth + 7 ownership + 6 ticket) y **5 todo** (4 `[docker-real]` + 1
-deuda de Fastify en regression-auth).
+Estado de la corrida canónica (BD del LXC, con `phase1_constraints.sql`
+aplicado): **42 rojos** (gateway/control plane/openapi/sandbox), **78 verdes**
+(24 auth originales + 24 regression-auth + 9 ownership + 14 internal + 1 env +
+6 ticket) y **5 todo** (4 `[docker-real]` + 1 deuda de Fastify en
+regression-auth).
 
 ## Cómo correr
 
@@ -22,6 +23,26 @@ npm test
 
 `npm test` necesita `TEST_DATABASE_URL` (la base debe terminar en `_test`) y las
 dos variables de JWT. `tests/setup.ts` aborta si la URL no cumple la regla.
+
+## Base de datos de test
+
+La suite canónica corre contra la base del LXC:
+
+```
+postgresql://alice:Qwerty123@192.168.68.66:5432/alice_backend_test?schema=public
+```
+
+Esa base **ya tiene `prisma/migrations/phase1_constraints.sql` aplicado**, así
+que `tests/ownership.test.ts` da **9/9** y la suite completa da
+**42 failed | 78 passed | 5 todo**.
+
+Una base nueva creada solo con `prisma migrate deploy` (sin aplicar el SQL
+manual de `phase1_constraints.sql`) da **ownership 7/9**: los 2 rojos son las
+garantías de DB que ese archivo añade (`agents_container_owner_fk` y el índice
+parcial `agents_one_primary_per_container`). **Eso es correcto para una base
+recién creada y no es un fallo ni una regresión de código**; con esa base la
+suite completa da 44 failed | 76 passed. No apliques el SQL manual a una base
+nueva solo para "arreglar" esos 2 tests.
 
 ## Qué se ha añadido
 

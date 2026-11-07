@@ -54,7 +54,7 @@ async function verifyUpstreamAuth(authorization: string | undefined): Promise<vo
 
 describe('gateway HTTP: proxy autenticado', () => {
   it('GET /v1/agents reenvía el JWT del contenedor y filtra a solo is_primary', async () => {
-    const requestPromise = fake.nextRequest(1000).catch(() => undefined);
+    const requestPromise = fake.nextRequest(1000);
     const response = await gateway.app.inject({
       method: 'GET',
       url: '/v1/agents',
@@ -71,7 +71,7 @@ describe('gateway HTTP: proxy autenticado', () => {
     expect(body[0]?.is_primary, 'el agente devuelto debe ser primario').toBe(true);
 
     const upstream = await requestPromise;
-    expect(upstream, 'el upstream debe recibir la petición proxy').toBeDefined();
+    expect(upstream, 'el upstream debe recibir la petición proxy').not.toBeNull();
     await verifyUpstreamAuth(upstream?.headers.authorization);
   });
 
@@ -108,7 +108,7 @@ describe('gateway HTTP: proxy autenticado', () => {
   });
 
   it('GET /app-server-info se reenvía y responde', async () => {
-    const requestPromise = fake.nextRequest(1000).catch(() => undefined);
+    const requestPromise = fake.nextRequest(1000);
     const response = await gateway.app.inject({
       method: 'GET',
       url: '/app-server-info',
@@ -119,7 +119,7 @@ describe('gateway HTTP: proxy autenticado', () => {
     expect(response.json(), 'la respuesta del fake debe reenviarse').toMatchObject({ ok: true });
 
     const upstream = await requestPromise;
-    expect(upstream, 'el upstream debe recibir /app-server-info').toBeDefined();
+    expect(upstream, 'el upstream debe recibir /app-server-info').not.toBeNull();
     expect(upstream?.url, 'el upstream debe recibir /app-server-info').toContain('/app-server-info');
   });
 
@@ -136,7 +136,7 @@ describe('gateway HTTP: proxy autenticado', () => {
   });
 
   it('un 500 del upstream se transforma en 502 UPSTREAM_ERROR', async () => {
-    const requestPromise = fake.nextRequest(1000).catch(() => undefined);
+    const requestPromise = fake.nextRequest(1000);
     const response = await gateway.app.inject({
       method: 'GET',
       url: '/v1/agents?status=500',
@@ -147,11 +147,11 @@ describe('gateway HTTP: proxy autenticado', () => {
     expect(response.json(), 'el cliente debe recibir UPSTREAM_ERROR').toMatchObject({
       error: { code: 'UPSTREAM_ERROR' },
     });
-    expect(await requestPromise, 'el gateway debe llegar al upstream').toBeDefined();
+    expect(await requestPromise, 'el gateway debe llegar al upstream').not.toBeNull();
   });
 
   it('un upstream más lento que UPSTREAM_TIMEOUT_MS devuelve 502', async () => {
-    const requestPromise = fake.nextRequest(1000).catch(() => undefined);
+    const requestPromise = fake.nextRequest(1000);
     const response = await gateway.app.inject({
       method: 'GET',
       url: '/v1/agents?delay=2000',
@@ -162,11 +162,11 @@ describe('gateway HTTP: proxy autenticado', () => {
     expect(response.json(), 'el timeout debe reportar UPSTREAM_ERROR').toMatchObject({
       error: { code: 'UPSTREAM_ERROR' },
     });
-    expect(await requestPromise, 'el gateway debe llegar al upstream').toBeDefined();
+    expect(await requestPromise, 'el gateway debe llegar al upstream').not.toBeNull();
   });
 
   it('reescribe Host al upstream y no reenvía el Origin del cliente', async () => {
-    const requestPromise = fake.nextRequest(1000).catch(() => undefined);
+    const requestPromise = fake.nextRequest(1000);
     const response = await gateway.app.inject({
       method: 'GET',
       url: '/v1/agents',
@@ -179,7 +179,7 @@ describe('gateway HTTP: proxy autenticado', () => {
 
     expect(response.statusCode, 'la petición debe completarse').toBe(200);
     const upstream = await requestPromise;
-    expect(upstream, 'el gateway debe llegar al upstream').toBeDefined();
+    expect(upstream, 'el gateway debe llegar al upstream').not.toBeNull();
     expect(upstream?.headers.host, 'Host debe reescribirse al del upstream').toBe(
       `127.0.0.1:${fake.portNumber}`,
     );

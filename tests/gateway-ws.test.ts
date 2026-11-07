@@ -97,9 +97,13 @@ describe('gateway WS: autenticación y tenant', () => {
 
 describe('gateway WS: handshake con el upstream', () => {
   it('reenvía un JWT de contenedor con aud sandbox:<containerId> y exp <= 60 s', async () => {
-    const upgradePromise = fake.nextUpgrade();
+    const upgradeSeen = fake.waitForUpgrade(1000);
     const client = await connectAlice();
-    const upgrade = await upgradePromise;
+    expect(
+      await upgradeSeen,
+      'el gateway debía abrir el upgrade hacia el upstream',
+    ).toBe(true);
+    const upgrade = fake.upgradeRequests.at(-1)!;
 
     const authorization = upgrade.headers.authorization;
     expect(
@@ -130,9 +134,13 @@ describe('gateway WS: handshake con el upstream', () => {
   });
 
   it('no reenvía el Origin del cliente al upstream', async () => {
-    const upgradePromise = fake.nextUpgrade();
+    const upgradeSeen = fake.waitForUpgrade(1000);
     const client = await connectAliceWithOrigin();
-    const upgrade = await upgradePromise;
+    expect(
+      await upgradeSeen,
+      'el gateway debía abrir el upgrade hacia el upstream',
+    ).toBe(true);
+    const upgrade = fake.upgradeRequests.at(-1)!;
 
     expect(
       upgrade.headers.origin,
@@ -251,12 +259,13 @@ describe('gateway WS: límites y errores', () => {
   });
 
   it('al cerrar el gateway se cierran todos los sockets cliente y upstream', async () => {
-    const connectionPromise = fake.nextConnection();
+    const connectionSeen = fake.nextConnection(1000);
     const client = await connectAlice();
-    const upstream = await connectionPromise;
+    const upstream = await connectionSeen;
+    expect(upstream, 'el gateway debía abrir la conexión al upstream').not.toBeNull();
 
     const clientClosed = client.waitClose();
-    const upstreamClosed = new Promise<void>((resolve) => upstream.once('close', () => resolve()));
+    const upstreamClosed = new Promise<void>((resolve) => upstream!.once('close', () => resolve()));
 
     await gateway.app.close();
 

@@ -36,10 +36,10 @@ export class FakeAgentServer {
 
   private readonly requestQueue: RecordedRequest[] = [];
   private readonly upgradeQueue: RecordedUpgrade[] = [];
-  private readonly requestWaiters: Array<(value: RecordedRequest) => void> = [];
-  private readonly upgradeWaiters: Array<(value: RecordedUpgrade) => void> = [];
+  private readonly requestWaiters: Array<(value: RecordedRequest | null) => void> = [];
+  private readonly upgradeWaiters: Array<(value: boolean) => void> = [];
   private readonly connectionQueue: WebSocket[] = [];
-  private readonly connectionWaiters: Array<(value: WebSocket) => void> = [];
+  private readonly connectionWaiters: Array<(value: WebSocket | null) => void> = [];
   private readonly timers = new Set<NodeJS.Timeout>();
   private readonly server: Server;
   private readonly wss: WebSocketServer;
@@ -122,61 +122,90 @@ export class FakeAgentServer {
     return `ws://127.0.0.1:${this.port}`;
   }
 
-  nextRequest(timeoutMs = 4000): Promise<RecordedRequest> {
+  nextRequest(timeoutMs = 4000): Promise<RecordedRequest | null> {
     const queued = this.requestQueue.shift();
     if (queued) return Promise.resolve(queued);
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
+      const waiter = (value: RecordedRequest | null) => {
+        clearTimeout(timer);
+        this.timers.delete(timer);
+        resolve(value);
+      };
       const timer = setTimeout(() => {
-        const index = this.requestWaiters.indexOf(resolve);
+        const index = this.requestWaiters.indexOf(waiter);
         if (index >= 0) this.requestWaiters.splice(index, 1);
-        reject(new Error('timeout esperando request al upstream falso'));
+        this.timers.delete(timer);
+        resolve(null);
       }, timeoutMs);
-      this.requestWaiters.push((value) => {
-        clearTimeout(timer);
-        resolve(value);
-      });
+      this.timers.add(timer);
+      this.requestWaiters.push(waiter);
     });
   }
 
-  nextUpgrade(timeoutMs = 4000): Promise<RecordedUpgrade> {
+  /**
+   * Espera el upgrade al upstream falso. **No lanza** si el gateway no lo
+   * abre: resuelve `false` para que el test decida si eso es un fallo. Un
+   * rechazo aquí era el origen de los unhandled rejections cuando el test
+   * fallaba antes de esperar esta promesa.
+   */
+  waitForUpgrade(timeoutMs = 4000): Promise<boolean> {
     const queued = this.upgradeQueue.shift();
-    if (queued) return Promise.resolve(queued);
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const index = this.upgradeWaiters.indexOf(resolve);
-        if (index >= 0) this.upgradeWaiters.splice(index, 1);
-        reject(new Error('timeout esperando upgrade al upstream falso'));
-      }, timeoutMs);
-      this.upgradeWaiters.push((value) => {
+    if (queued) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const waiter = (value: boolean) => {
         clearTimeout(timer);
+        this.timers.delete(timer);
         resolve(value);
-      });
+      };
+      const timer = setTimeout(() => {
+        const index = this.upgradeWaiters.indexOf(waiter);
+        if (index >= 0) this.upgradeWaiters.splice(index, 1);
+        this.timers.delete(timer);
+        resolve(false);
+      }, timeoutMs);
+      this.timers.add(timer);
+      this.upgradeWaiters.push(waiter);
     });
   }
 
-  nextConnection(timeoutMs = 4000): Promise<WebSocket> {
+  nextConnection(timeoutMs = 4000): Promise<WebSocket | null> {
     const queued = this.connectionQueue.shift();
     if (queued) return Promise.resolve(queued);
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const index = this.connectionWaiters.indexOf(resolve);
-        if (index >= 0) this.connectionWaiters.splice(index, 1);
-        reject(new Error('timeout esperando conexión WS al upstream falso'));
-      }, timeoutMs);
-      this.connectionWaiters.push((value) => {
+    return new Promise((resolve) => {
+      const waiter = (value: WebSocket | null) => {
         clearTimeout(timer);
+        this.timers.delete(timer);
         resolve(value);
-      });
+      };
+      const timer = setTimeout(() => {
+        const index = this.connectionWaiters.indexOf(waiter);
+        if (index >= 0) this.connectionWaiters.splice(index, 1);
+        this.timers.delete(timer);
+        resolve(null);
+      }, timeoutMs);
+      this.timers.add(timer);
+      this.connectionWaiters.push(waiter);
     });
   }
 
   async close(): Promise<void> {
+    // Primero se liquidan los waiters pendientes (resolviendo timeout/false),
+    // luego se cancelan los timers que sigan vivos. Así ninguna promesa queda
+    // colgada ni rechaza después de que el test haya terminado.
+    this.disposePendingWaiters();
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
+
     for (const ws of this.connections) ws.terminate();
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
     this.server.closeAllConnections?.();
     await new Promise<void>((resolve) => this.server.close(() => resolve()));
+  }
+
+  private disposePendingWaiters(): void {
+    for (const waiter of this.requestWaiters.splice(0)) waiter(null);
+    for (const waiter of this.upgradeWaiters.splice(0)) waiter(false);
+    for (const waiter of this.connectionWaiters.splice(0)) waiter(null);
   }
 
   private pushRequest(value: RecordedRequest): void {
@@ -187,7 +216,7 @@ export class FakeAgentServer {
 
   private pushUpgrade(value: RecordedUpgrade): void {
     const waiter = this.upgradeWaiters.shift();
-    if (waiter) waiter(value);
+    if (waiter) waiter(true);
     else this.upgradeQueue.push(value);
   }
 
