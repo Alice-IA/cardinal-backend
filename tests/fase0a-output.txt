@@ -1,0 +1,152 @@
+﻿# Fase 0a — salida cruda de verificación
+
+Ejecutado contra PostgreSQL 16 real (base `alice_backend_test`) el 2026-11-07.
+Los comandos se ejecutaron uno a uno.
+
+## 1) npx vitest run tests/ownership.test.ts -t "bob no puede resolver"
+
+
+ RUN  v5.0.5 C:/Users/52452/Documents/Development/AliceAI/cardinal-backend
+
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": PostgreSQL database "alice_backend_test", schema "public" at "127.0.0.1:55432"
+
+2 migrations found in prisma/migrations
+
+
+No pending migrations to apply.
+ ❯ tests/ownership.test.ts (9 tests | 1 failed | 8 skipped) 211ms
+   ❯ ownership: resolveRoute (5)
+     ↓ alice resuelve su agente primario a la ruta del nodo
+     × bob no puede resolver el agente de alice 209ms
+     ↓ un agente inexistente devuelve null
+     ↓ un contenedor en creating devuelve SANDBOX_NOT_READY
+     ↓ un nodo down devuelve NODE_UNAVAILABLE
+   ↓ ownership: listPrimaryAgents (2)
+     ↓ lista exactamente el agente primario de alice y no el subagente
+     ↓ la lista de bob no contiene el agente de alice
+   ↓ ownership: garantías en la base de datos (2)
+     ↓ un agente no puede apuntar al contenedor de alice con el user_id de bob
+     ↓ no puede haber dos agentes is_primary=true en el mismo contenedor
+node.exe : 
+En línea: 1 Carácter: 1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/ownership.test.ts > ownership: resolveRoute > bob no puede resolver el agente de alice
+AssertionError: el stub de fase 0a no debe sobrevivir: la implementación debe reemplazarlo: expected { Object 
+(__phase0aStub) } to not have property "__phase0aStub"
+
+- Expected:
+undefined
+
++ Received:
+"not implemented: resolveRoute"
+
+ ❯ tests/ownership.test.ts:52:11
+     50|       route,
+     51|       'el stub de fase 0a no debe sobrevivir: la implementación debe r…
+     52|     ).not.toHaveProperty('__phase0aStub');
+       |           ^
+     53|     expect(route, 'bob no debe resolver el agente de alice').toEqual(n…
+     54|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 8 skipped (9)
+   Start at  02:16:48
+   Duration  3.36s (tests 45%, import 39%, transform 12%, setup 2%, worker 2%)
+
+
+
+## 2) npx vitest run tests/ownership.test.ts -t "un agente no puede apuntar"
+
+
+ RUN  v5.0.5 C:/Users/52452/Documents/Development/AliceAI/cardinal-backend
+
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": PostgreSQL database "alice_backend_test", schema "public" at "127.0.0.1:55432"
+
+2 migrations found in prisma/migrations
+
+
+No pending migrations to apply.
+ ❯ tests/ownership.test.ts (9 tests | 1 failed | 8 skipped) 214ms
+   ↓ ownership: resolveRoute (5)
+     ↓ alice resuelve su agente primario a la ruta del nodo
+     ↓ bob no puede resolver el agente de alice
+     ↓ un agente inexistente devuelve null
+     ↓ un contenedor en creating devuelve SANDBOX_NOT_READY
+     ↓ un nodo down devuelve NODE_UNAVAILABLE
+   ↓ ownership: listPrimaryAgents (2)
+     ↓ lista exactamente el agente primario de alice y no el subagente
+     ↓ la lista de bob no contiene el agente de alice
+   ❯ ownership: garantías en la base de datos (2)
+     × un agente no puede apuntar al contenedor de alice con el user_id de bob 213ms
+     ↓ no puede haber dos agentes is_primary=true en el mismo contenedor
+node.exe : 
+En línea: 1 Carácter: 1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/ownership.test.ts > ownership: garantías en la base de datos > un agente no puede apuntar al contenedor 
+de alice con el user_id de bob
+AssertionError: falta agents_container_owner_fk: el INSERT cruzado (contenedor de alice + user_id de bob) fue 
+aceptado: expected undefined to be defined
+ ❯ tests/ownership.test.ts:142:7
+    140|       error,
+    141|       'falta agents_container_owner_fk: el INSERT cruzado (contenedor …
+    142|     ).toBeDefined();
+       |       ^
+    143|     expect(
+    144|       sqlState(error),
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 8 skipped (9)
+   Start at  02:16:54
+   Duration  3.46s (tests 47%, import 40%, transform 8%, setup 3%, worker 2%)
+
+
+
+## 3) npx vitest run tests/regression-auth.test.ts
+
+
+ RUN  v5.0.5 C:/Users/52452/Documents/Development/AliceAI/cardinal-backend
+
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": PostgreSQL database "alice_backend_test", schema "public" at "127.0.0.1:55432"
+
+2 migrations found in prisma/migrations
+
+
+No pending migrations to apply.
+ ✓ tests/regression-auth.test.ts (24 tests) 5911ms
+   ✓ POST /auth/register (4)
+     ✓ crea el usuario y devuelve sólo la forma pública 312ms
+   ✓ registro: tiempo de respuesta (1)
+     ✓ un email duplicado no responde significativamente más rápido que uno nuevo 420ms
+   ✓ POST /auth/refresh (6)
+     ✓ dos refresh concurrentes con el mismo token: sólo uno gana y la sesión que emite sigue viva 309ms
+   ✓ rate limit de login (2)
+     ✓ el sexto login fallido devuelve 429 336ms
+     ✓ un login exitoso resetea el contador de la combinación ip+email 480ms
+
+ Test Files  1 passed (1)
+      Tests  24 passed (24)
+   Start at  02:16:31
+   Duration  9.75s (tests 89%, import 9%, transform 2%)
+
+
