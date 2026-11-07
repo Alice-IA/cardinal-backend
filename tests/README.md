@@ -6,9 +6,10 @@ sandbox **antes** de implementar la lógica de negocio. Los stubs deben estar
 tests de regresión de auth deben estar **verdes contra la app Express real**
 (la regresión todavía no corre contra Fastify, ver más abajo).
 
-Estado de la corrida: **57 rojos** (stubs de ownership/ticket/gateway/control
-plane/openapi/sandbox), **48 verdes** (24 auth originales + 24 regression-auth)
-y **5 todo** (4 `[docker-real]` + 1 deuda de Fastify en regression-auth).
+Estado de la corrida: **43 rojos** (gateway/control plane/openapi/sandbox y
+las 2 garantías de DB de ownership), **61 verdes** (24 auth originales + 24
+regression-auth + 7 ownership + 6 ticket) y **5 todo** (4 `[docker-real]` + 1
+deuda de Fastify en regression-auth).
 
 ## Cómo correr
 
@@ -22,14 +23,15 @@ npm test
 `npm test` necesita `TEST_DATABASE_URL` (la base debe terminar en `_test`) y las
 dos variables de JWT. `tests/setup.ts` aborta si la URL no cumple la regla.
 
-## Qué se ha añadido en fase 0a
+## Qué se ha añadido
 
 | Pieza | Estado |
 | --- | --- |
 | `prisma/migrations/20261106000000_phase0_contract` | Columnas/tablas mínimas para expresar los tests (`agents.is_primary`, `nodes`, `containers.node_id`, `containers.ws_secret_path`). |
 | `prisma/migrations/phase1_constraints.sql` | SQL manual de fase 1 con la FK compuesta y el índice parcial único. **No está aplicado** ni forma parte de la migración automática; solo queda listo. Incluye el `UNIQUE (id, user_id)` previo que Postgres exige para la FK. |
-| Stubs `src/modules/agents/ownership.service.ts`, `src/modules/tickets/ticket.service.ts`, `src/modules/sandbox/sandbox-manager.ts`, `src/gateway/app.ts`, `src/control-plane/app.ts` | Lanzan `new Error('not implemented: …')` o responden `501`. No hay lógica de negocio. |
-| Tests `tests/ownership/ticket/gateway/contract/openapi/sandbox-manager` | Rojos por comportamiento (no por imports sin resolver). |
+| `src/modules/agents/ownership.service.ts` y `src/modules/tickets/ticket.service.ts` | **Implementados** en fase 1a. Ownership 7/9 en verde; los 2 rojos son las garantías de DB pendientes. Ticket 6/6 en verde. |
+| Stubs `src/modules/sandbox/sandbox-manager.ts`, `src/gateway/app.ts`, `src/control-plane/app.ts` | Siguen lanzando `not implemented` o respondiendo `501`. No hay lógica de negocio. |
+| Tests `tests/ownership/ticket/gateway/contract/openapi/sandbox-manager` | Ownership 7 verdes + 2 rojos; ticket 6 verdes; gateway/contract/openapi/sandbox-manager rojos por comportamiento. |
 | `tests/regression-auth.test.ts` | **Verde contra la app Express real** con supertest; se mantiene así hasta la migración a Fastify. |
 
 La migración automática **no** añade las dos restricciones que defienden los
@@ -49,27 +51,31 @@ implementado; **todo** = no ejecutado en CI.
 
 | Test | Contrato que defiende | Estado |
 | --- | --- | --- |
-| alice resuelve su agente primario a la ruta del nodo | `resolveRoute(user, agent)` devuelve `{host, port, nodeId}` | rojo |
-| bob no puede resolver el agente de alice | **aislamiento de tenant**: usuario ajeno → `null` | rojo |
-| un agente inexistente devuelve null | no distinguir inexistente de ajeno | rojo |
-| un contenedor en creating devuelve SANDBOX_NOT_READY | no enrutar a un sandbox no listo | rojo |
-| un nodo down devuelve NODE_UNAVAILABLE | no enrutar a un nodo caído | rojo |
-| lista exactamente el agente primario de alice y no el subagente | `listPrimaryAgents` filtra `is_primary` | rojo |
-| la lista de bob no contiene el agente de alice | aislamiento en listados | rojo |
-| un agente no puede apuntar al contenedor de alice con el user_id de bob | FK compuesta `agents_container_owner_fk` → SQLSTATE 23503 | rojo |
-| no puede haber dos agentes is_primary=true en el mismo contenedor | índice parcial único → SQLSTATE 23505 | rojo |
+| alice resuelve su agente primario a la ruta del nodo | `resolveRoute(user, agent)` devuelve `{host, port, nodeId}` | verde |
+| bob no puede resolver el agente de alice | **aislamiento de tenant**: usuario ajeno → `null` | verde |
+| un agente inexistente devuelve null | no distinguir inexistente de ajeno | verde |
+| un contenedor en creating devuelve SANDBOX_NOT_READY | no enrutar a un sandbox no listo | verde |
+| un nodo down devuelve NODE_UNAVAILABLE | no enrutar a un nodo caído | verde |
+| lista exactamente el agente primario de alice y no el subagente | `listPrimaryAgents` filtra `is_primary` | verde |
+| la lista de bob no contiene el agente de alice | aislamiento en listados | verde |
+| un agente no puede apuntar al contenedor de alice con el user_id de bob | FK compuesta `agents_container_owner_fk` → SQLSTATE 23503 | rojo (requiere aplicar `phase1_constraints.sql`) |
+| no puede haber dos agentes is_primary=true en el mismo contenedor | índice parcial único → SQLSTATE 23505 | rojo (requiere aplicar `phase1_constraints.sql`) |
 
 ### `tests/ticket.test.ts`
 
 | Test | Contrato que defiende | Estado |
 | --- | --- | --- |
-| emite base64url(payload).base64url(hmac) con exp = now + 30 | formato y TTL de 30 s | rojo |
-| el payload no filtra containerPort ni internalHost | no filtrar enrutamiento al cliente | rojo |
-| falla si el jti ya fue reservado | `jti` de un solo uso, sin reutilización | rojo |
-| rechaza una firma alterada con TICKET_INVALID | autenticidad HMAC | rojo |
-| rechaza un ticket expirado con TICKET_EXPIRED | `exp` pasado | rojo |
-| el segundo consumo del mismo jti da TICKET_ALREADY_USED y deja TTL en Redis | replay protection + TTL 25–30 s | rojo |
-| devuelve solo userId, agentId y containerId; sin host ni port | el gateway re-resuelve contra DB | rojo |
+| emite base64url(payload).base64url(hmac) con exp = now + 30 | formato y TTL de 30 s | verde |
+| el payload no filtra containerPort ni internalHost | no filtrar enrutamiento al cliente | verde |
+| rechaza una firma alterada con TICKET_INVALID | autenticidad HMAC | verde |
+| rechaza un ticket expirado con TICKET_EXPIRED | `exp` pasado | verde |
+| el segundo consumo del mismo jti da TICKET_ALREADY_USED y deja TTL en Redis | replay protection + TTL 25–30 s | verde |
+| devuelve solo userId, agentId y containerId; sin host ni port | el gateway re-resuelve contra DB | verde |
+
+`jti` lo genera el servidor con `randomUUID()`; no existe camino para que el
+cliente inyecte un `jti`, así que el test de colisión no aplica.
+`issueTicket` es sin estado: no escribe en Redis y no depende de que Redis esté
+arriba. Solo `consumeTicket` escribe `ticket:used:<jti>`.
 
 ### `tests/gateway-ws.test.ts`
 
@@ -184,21 +190,19 @@ infraestructura:
 El assert de claims (`['exp','iat','jti','sub']`) y el de medianas siguen
 exactamente igual.
 
-### Wrapper de ownership fase 0a (decisión B)
+### Wrapper de ownership: eliminado en fase 1a
 
-`resolveRouteForPhase0a` convierte únicamente el `not implemented` del stub en
-`{ __phase0aStub: ... }` para que el rojo sea una aserción y no un throw. Para
-evitar que el wrapper esconda un stub que sobrevive a la implementación, el test
-central hace **antes** de comparar con `null`:
+En fase 0a el test central usaba `resolveRouteForPhase0a` para convertir el
+`not implemented` del stub en un valor y añadía un guard
+`expect(route).not.toHaveProperty('__phase0aStub')`. Con `resolveRoute`
+implementado y devolviendo `null`, ese guard lanzaba `TypeError` porque
+`toHaveProperty` no acepta `null`. Se eliminó el wrapper y el guard (autorizado
+en fase 1a); el test central ahora llama directo:
 
 ```ts
-expect(route, 'el stub de fase 0a no debe sobrevivir').not.toHaveProperty('__phase0aStub');
-expect(route, 'bob no debe resolver el agente de alice').toEqual(null);
+const route = await resolveRoute(fixture.bob.id, fixture.alice.primaryAgentId);
+expect(route, 'bob no debe resolver el agente de alice').toBeNull();
 ```
-
-Si en fase 1 `resolveRoute` sigue lanzando, el test falla en la primera
-aserción; si devuelve la fila de alice, falla en la segunda. El wrapper se
-elimina cuando la implementación esté lista.
 
 ## Supuestos: decisiones pendientes de firma
 
@@ -212,8 +216,7 @@ infraestructura, ajeno = `NOT_FOUND`, y `/v1/agents` solo `is_primary`.
 | Ruta WS | `GET /v1/agents/:agentId/ws` (`GATEWAY_WS_PATH`). | Sí. El `agentId` es un ID público de recurso; el access token sigue llevando solo `sub` y la autorización se resuelve contra la DB. No expone host, puerto ni secreto. | Mantener. Es la ruta natural del gateway y no introduce datos de infraestructura en el token ni en la URL. Pendiente de firma porque el documento no la nombra. |
 | Envelope de `GET /api/agents` y `GET /v1/agents` | **Array plano `Agent[]`** en ambos. Antes los tests asumían `{ agents: [...] }`; se corrigió. | Sí. Es lo que consume el SDK de `letta-oss-ui`; no envuelve datos internos. | Mantener array plano. Si el app-server responde `{ agents: [...] }`, el gateway **desanida en el handler `GET /v1/agents`**, justo antes de filtrar `is_primary`; el control plane nunca envuelve. Así el contrato público es siempre `Agent[]` y el cliente del SDK no cambia. |
 | Forma de `node` en `GET /api/sandbox` | `{ status, node: { status }, lastSeenAt }`; `node` es objeto con `status`, sin `id`, `host` ni `port`. | Sí. El test de sandbox ahora recorre la respuesta a cualquier profundidad y falla si aparece `internalHost`, `containerPort`, `wsSecretPath` o `nodeId`, incluido `node.nodeId`. | Mantener `node: { status }`. El test 8 del documento exige `node.status`; un string no serviría. No incluir `id` para no abrir la puerta a `nodeId`. |
-| API interna del ticket | `issueTicket(input, { store, secret, now })` y `consumeTicket(ticket, deps)`. El payload no lleva `containerPort` ni `internalHost`; `consumeTicket` devuelve solo `{ userId, agentId, containerId }`, sin `host`/`port`. | Sí. No es una API HTTP pública; el ticket es opaco para el cliente y no filtra enrutamiento. | Mantener el seam inyectable para testear TTL/replay sin Redis real. En fase 1 vive en `packages/core` y lo importan backend (emite) y gateway (consume): una sola implementación, sin duplicar. |
-| Código de error si el `jti` colisiona al emitir | El test solo exige que la segunda emisión falle; no fija código. | Sí. No revela nada al cliente. | Fijar antes de implementar: `TICKET_ALREADY_USED` (409) para jti ya reservado, igual que el consumo, o `TICKET_INVALID` (401) si se considera firma/uso inválido. Recomiendo `TICKET_ALREADY_USED` para no introducir un quinto código. |
+| API interna del ticket | `issueTicket(input, { store, secret, now })` y `consumeTicket(ticket, deps)`. El payload no lleva `containerPort` ni `internalHost`; `consumeTicket` devuelve solo `{ userId, agentId, containerId }`, sin `host`/`port`. `issueTicket` no escribe en Redis. | Sí. No es una API HTTP pública; el ticket es opaco para el cliente y no filtra enrutamiento. | Mantener el seam inyectable para testear TTL/replay sin Redis real. En fase 1 vive en `packages/core` y lo importan backend (emite) y gateway (consume): una sola implementación, sin duplicar. |
 | Protocolo de close WS para errores | Close `4503` (`SANDBOX_NOT_READY`/`NODE_UNAVAILABLE`), `4409` (`CONNECTION_LIMIT`) y `4401` (upstream 401); el `reason` del close (o un frame previo) contiene el código. | Sí. El close no incluye host, puerto ni secreto. | Mantener. Documentar que el `reason` es solo el código de error estable; el cliente no debe parsear infraestructura. Pendiente de firma porque el documento no fija el formato exacto del `reason`. |
 | Claims del access token | `sub` + `iat`, `exp`, `jti`; **cero** `containerId`, `nodeId`, `agentId` o `containerPort`. El assert existente exige exactamente `['exp', 'iat', 'jti', 'sub']`. | Sí, interpretando "nada más" como ningún claim de routing/tenant: `iat`/`exp`/`jti` son metadata JWT, no destino. El test de auth ya prohíbe cualquier claim extra. | Mantener `sub` + claims registrados y añadir un assert negativo explícito de routing si se quiere blindar. Si la regla se interpreta literal (solo `sub`), hay que cambiar la implementación de auth y el assert existente; es un cambio de contrato y no se hace sin firma. |
 | `UNIQUE (id, user_id)` en `containers` | Se añade `containers_id_user_id_key` en `phase1_constraints.sql` (no aplicado). | **Sí.** Requerido por PostgreSQL para aceptar `agents_container_owner_fk`. Inofensivo porque `id` ya es PK. | **Aceptar.** Consecuencia: la FK amarra el agente al par exacto `(id, user_id)`; si cambia el algoritmo de hash del container id, hay que migrar la fila. |

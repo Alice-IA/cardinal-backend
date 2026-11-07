@@ -14,7 +14,6 @@ const INPUT = {
   userId: '11111111-1111-4111-8111-111111111111',
   agentId: 'agent-alice-primary',
   containerId: 'container-alice',
-  jti: 'jti-fijo-para-el-test',
 };
 
 let store: FakeRedis;
@@ -50,7 +49,9 @@ describe('issueTicket', () => {
     expect(payload.userId, 'el payload debe llevar el usuario').toBe(INPUT.userId);
     expect(payload.agentId, 'el payload debe llevar el agente').toBe(INPUT.agentId);
     expect(payload.containerId, 'el payload debe llevar el contenedor').toBe(INPUT.containerId);
-    expect(payload.jti, 'el payload debe llevar el jti').toBe(INPUT.jti);
+    expect(payload.jti, 'el jti lo genera el servidor').toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
 
     const expected = createHmac('sha256', SECRET).update(payloadB64).digest('base64url');
     expect(signatureB64, 'la firma debe ser HMAC-SHA256 del payload').toBe(expected);
@@ -66,15 +67,6 @@ describe('issueTicket', () => {
     expect(payload, 'el payload no debe contener internalHost').not.toHaveProperty(
       'internalHost',
     );
-  });
-
-  it('falla si el jti ya fue reservado (no reutiliza jti)', async () => {
-    await issueTicket({ ...INPUT, jti: 'jti-repetido' }, deps);
-
-    await expect(
-      issueTicket({ ...INPUT, jti: 'jti-repetido' }, deps),
-      'issueTicket debe rechazar un jti ya reservado',
-    ).rejects.toThrow();
   });
 });
 

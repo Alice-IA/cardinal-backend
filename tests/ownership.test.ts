@@ -12,23 +12,6 @@ beforeEach(async () => {
   fixture = await seedTenantFixture({ includeAliceSubAgent: true });
 });
 
-/**
- * Fase 0a: `resolveRoute` es un stub que lanza `not implemented`. Para que el
- * test central falle por la aserción de tenant (expected null / received) y no
- * por un throw, convertimos SOLO ese error conocido en un valor visible.
- * En fase 1 se elimina este wrapper y se llama a `resolveRoute` directo.
- */
-async function resolveRouteForPhase0a(userId: string, agentId: string): Promise<unknown> {
-  try {
-    return await resolveRoute(userId, agentId);
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('not implemented:')) {
-      return { __phase0aStub: error.message };
-    }
-    throw error;
-  }
-}
-
 describe('ownership: resolveRoute', () => {
   it('alice resuelve su agente primario a la ruta del nodo', async () => {
     const route = await resolveRoute(fixture.alice.id, fixture.alice.primaryAgentId);
@@ -44,13 +27,9 @@ describe('ownership: resolveRoute', () => {
   // Si este test pasa en verde con `null` reemplazado por la fila de alice,
   // hay fuga de tenant: bob estaría recibiendo la ruta del contenedor ajeno.
   it('bob no puede resolver el agente de alice', async () => {
-    const route = await resolveRouteForPhase0a(fixture.bob.id, fixture.alice.primaryAgentId);
+    const route = await resolveRoute(fixture.bob.id, fixture.alice.primaryAgentId);
 
-    expect(
-      route,
-      'el stub de fase 0a no debe sobrevivir: la implementación debe reemplazarlo',
-    ).not.toHaveProperty('__phase0aStub');
-    expect(route, 'bob no debe resolver el agente de alice').toEqual(null);
+    expect(route, 'bob no debe resolver el agente de alice').toBeNull();
   });
 
   it('un agente inexistente devuelve null', async () => {
