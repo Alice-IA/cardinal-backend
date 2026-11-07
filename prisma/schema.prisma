@@ -1,0 +1,105 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Usuarios
+// ─────────────────────────────────────────────────────────────
+model User {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email           String    @db.Text
+  passwordHash    String    @map("password_hash") @db.Text
+  name            String?   @db.Text
+  emailVerifiedAt DateTime? @map("email_verified_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  containers    Container[]
+  agents        Agent[]
+  refreshTokens RefreshToken[]
+
+  @@index([email], map: "users_email_idx")  // ver nota abajo sobre lower(email)
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Contenedores Docker aprovisionados por usuario
+// ─────────────────────────────────────────────────────────────
+model Container {
+  id            String   @id @db.Text           // sha256 del container id
+  userId        String   @map("user_id") @db.Uuid
+  containerPort Int      @unique @map("container_port")
+  status        String   @default("creating") @db.Text
+  errorMessage  String?  @map("error_message") @db.Text
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agents Agent[]
+
+  @@index([userId], map: "containers_user_idx")
+  @@map("containers")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Agentes Letta dentro de un contenedor
+// ─────────────────────────────────────────────────────────────
+model Agent {
+  agentId     String   @id @map("agent_id") @db.Text   // ID de Letta, formato propio
+  containerId String   @map("container_id") @db.Text
+  userId      String   @map("user_id") @db.Uuid
+  agentName   String   @default("Alice") @map("agent_name") @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  container Container @relation(fields: [containerId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([containerId], map: "agents_container_idx")
+  @@map("agents")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Refresh tokens (rotación + detección de reuso por familia)
+// ─────────────────────────────────────────────────────────────
+model RefreshToken {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  tokenHash         String    @map("token_hash") @db.Text   // sha256 del token
+  familyId          String    @map("family_id") @db.Uuid
+  expiresAt         DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt            DateTime? @map("used_at") @db.Timestamptz(6)
+  revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(6)
+  replacedByTokenId String?   @unique @map("replaced_by_token_id") @db.Uuid
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBy     RefreshToken?  @relation("TokenRotation", fields: [replacedByTokenId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  replaces       RefreshToken?  @relation("TokenRotation")
+
+  @@unique([tokenHash], map: "refresh_tokens_hash_key")
+  @@index([familyId], map: "refresh_tokens_family_idx")
+  @@index([userId], map: "refresh_tokens_user_idx")
+  @@index([expiresAt], map: "refresh_tokens_expires_idx")  // para purga
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Intentos de login (rate limit respaldado en DB)
+// ─────────────────────────────────────────────────────────────
+model LoginAttempt {
+  id        BigInt    @id @default(autoincrement())
+  ip        String    @db.Inet
+  email     String    @db.Text
+  successAt DateTime? @map("success_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([ip, email, createdAt], map: "login_attempts_rate_idx")
+  @@index([createdAt], map: "login_attempts_created_idx")  // para purga
+  @@map("login_attempts")
+}

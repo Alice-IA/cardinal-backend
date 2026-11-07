@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: alice-backend-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: alice
+      POSTGRES_PASSWORD: alice
+      POSTGRES_DB: alice_backend
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Sólo se ejecuta con el volumen vacío (primera vez): crea la DB de test.
+      - ./docker/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alice -d alice_backend"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+    name: alice_backend_postgres_data
