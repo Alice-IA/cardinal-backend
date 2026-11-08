@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { resolveRoute, listPrimaryAgents } from '../src/modules/agents/ownership.service';
+import { resolvePrimaryRoute, resolveRoute, listPrimaryAgents } from '../src/modules/agents/ownership.service';
 import { prisma } from '../src/config/prisma';
 import { resetDb, sqlState } from './helpers/db';
 import { seedTenantFixture, type TenantFixture } from './helpers/fixtures';
@@ -61,6 +61,65 @@ describe('ownership: resolveRoute', () => {
 
     expect(route, 'un nodo down no puede enrutar').toEqual({
       error: 'NODE_UNAVAILABLE',
+    });
+  });
+});
+
+describe('ownership: resolvePrimaryRoute', () => {
+  it('alice resuelve su agente primario a la ruta del nodo', async () => {
+    const route = await resolvePrimaryRoute(fixture.alice.id);
+
+    expect(route, 'alice debe resolver su agente primario').toEqual({
+      host: '127.0.0.1',
+      port: 9,
+      nodeId: fixture.alice.nodeId,
+    });
+  });
+
+  it('un usuario sin agentes devuelve null', async () => {
+    const route = await resolvePrimaryRoute(randomUUID());
+
+    expect(route, 'un userId inexistente no debe resolver ruta').toBeNull();
+  });
+
+  it('un contenedor en creating devuelve SANDBOX_NOT_READY', async () => {
+    await prisma.container.update({
+      where: { id: fixture.alice.containerId },
+      data: { status: 'creating' },
+    });
+
+    const route = await resolvePrimaryRoute(fixture.alice.id);
+
+    expect(route, 'un sandbox en creating no está listo para enrutar').toEqual({
+      error: 'SANDBOX_NOT_READY',
+    });
+  });
+
+  it('un nodo down devuelve NODE_UNAVAILABLE', async () => {
+    await prisma.node.update({
+      where: { id: fixture.alice.nodeId },
+      data: { status: 'down' },
+    });
+
+    const route = await resolvePrimaryRoute(fixture.alice.id);
+
+    expect(route, 'un nodo down no puede enrutar').toEqual({
+      error: 'NODE_UNAVAILABLE',
+    });
+  });
+
+  it('con un subagente en el contenedor devuelve el primario, no el subagente', async () => {
+    // El fixture incluye un subagente (is_primary=false) en el mismo
+    // contenedor que el primario. La resolución sin agentId debe ignorarlo y
+    // seguir devolviendo la ruta del contenedor del primario.
+    expect(fixture.aliceSubAgentId, 'el fixture debe incluir el subagente').toBeDefined();
+
+    const route = await resolvePrimaryRoute(fixture.alice.id);
+
+    expect(route).toEqual({
+      host: '127.0.0.1',
+      port: 9,
+      nodeId: fixture.alice.nodeId,
     });
   });
 });

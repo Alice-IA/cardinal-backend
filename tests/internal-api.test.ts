@@ -243,6 +243,101 @@ describe('internal API: POST /internal/route', () => {
   });
 });
 
+describe('internal API: POST /internal/route sin agentId (primario)', () => {
+  it('resuelve el agente primario de alice a {host, port, nodeId}', async () => {
+    const response = await post(ROUTE_URL, { userId: fixture.alice.id });
+
+    expect(response.statusCode, 'sin agentId debe resolver el primario').toBe(200);
+    expect(response.json()).toEqual({
+      host: '127.0.0.1',
+      port: 9,
+      nodeId: fixture.alice.nodeId,
+    });
+  });
+
+  it('con un subagente en el contenedor devuelve la ruta del primario', async () => {
+    await prisma.agent.create({
+      data: {
+        agentId: 'agent-alice-sub-internal',
+        containerId: fixture.alice.containerId,
+        userId: fixture.alice.id,
+        agentName: 'Subagente',
+        isPrimary: false,
+      },
+    });
+
+    const response = await post(ROUTE_URL, { userId: fixture.alice.id });
+
+    expect(response.statusCode, 'el subagente no debe cambiar la ruta').toBe(200);
+    expect(response.json()).toEqual({
+      host: '127.0.0.1',
+      port: 9,
+      nodeId: fixture.alice.nodeId,
+    });
+  });
+
+  it('agentId vacío responde 400 VALIDATION_ERROR (no es centinela)', async () => {
+    const response = await post(ROUTE_URL, {
+      userId: fixture.alice.id,
+      agentId: '',
+    });
+
+    expect(response.statusCode, 'la cadena vacía no es un agentId válido').toBe(400);
+    expect(response.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+  });
+
+  it('un contenedor en creating responde 200 {error:SANDBOX_NOT_READY}', async () => {
+    await prisma.container.update({
+      where: { id: fixture.alice.containerId },
+      data: { status: 'creating' },
+    });
+
+    const response = await post(ROUTE_URL, { userId: fixture.alice.id });
+
+    expect(response.statusCode, 'el motivo va en el cuerpo, no en el status').toBe(200);
+    expect(response.json()).toEqual({ error: 'SANDBOX_NOT_READY' });
+  });
+
+  it('un nodo down responde 200 {error:NODE_UNAVAILABLE}', async () => {
+    await prisma.node.update({
+      where: { id: fixture.alice.nodeId },
+      data: { status: 'down' },
+    });
+
+    const response = await post(ROUTE_URL, { userId: fixture.alice.id });
+
+    expect(response.statusCode, 'el motivo va en el cuerpo, no en el status').toBe(200);
+    expect(response.json()).toEqual({ error: 'NODE_UNAVAILABLE' });
+  });
+
+  it('un usuario sin contenedor responde 200 {error:NOT_FOUND}', async () => {
+    const user = await prisma.user.create({
+      data: { email: 'sin-contenedor@example.com', passwordHash: 'test-only' },
+    });
+
+    const response = await post(ROUTE_URL, { userId: user.id });
+
+    expect(response.statusCode, 'sin fila la petición sigue siendo válida').toBe(200);
+    expect(response.json()).toEqual({ error: 'NOT_FOUND' });
+  });
+
+  it('la respuesta de error sin agentId no contiene host, port ni nodeId', async () => {
+    const user = await prisma.user.create({
+      data: { email: 'sin-contenedor-error@example.com', passwordHash: 'test-only' },
+    });
+
+    const response = await post(ROUTE_URL, { userId: user.id });
+
+    expect(response.statusCode, 'el caso no resoluble debe responder 200').toBe(200);
+    const body = response.json() as Record<string, unknown>;
+    expect(Object.keys(body), 'el error solo debe traer el motivo').toEqual(['error']);
+    expect(body).not.toHaveProperty('host');
+    expect(body).not.toHaveProperty('port');
+    expect(body).not.toHaveProperty('nodeId');
+    expect(body).not.toHaveProperty('internalHost');
+  });
+});
+
 describe('internal API: seguridad', () => {
   it('el token interno no aparece en la respuesta ni en el access log', async () => {
     // Reconstruimos la app con un logger capturable para inspeccionar su salida.

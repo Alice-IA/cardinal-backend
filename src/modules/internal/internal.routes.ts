@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireInternalToken } from '../../middlewares/internal-auth.middleware';
-import { resolveRoute } from '../agents/ownership.service';
+import { resolvePrimaryRoute, resolveRoute } from '../agents/ownership.service';
 import { consumeTicket, type TicketDeps } from '../tickets/ticket.service';
 import { validationError, type ErrorDetail } from '../../utils/errors';
 
@@ -21,7 +21,9 @@ const consumeBody = z.object({
 
 const routeBody = z.object({
   userId: z.uuid('userId debe ser un UUID'),
-  agentId: z.string().min(1, 'agentId es obligatorio'),
+  // Ausente = resolver el agente primario del usuario. La cadena vacía NO es
+  // un centinela válido: se rechaza con 400 (min(1) dentro del optional).
+  agentId: z.string().min(1, 'agentId no puede estar vacío').optional(),
 });
 
 function zodDetails(error: z.ZodError): ErrorDetail[] {
@@ -57,7 +59,14 @@ export function registerInternalRoutes(
     const parsed = routeBody.safeParse(request.body);
     if (!parsed.success) throw validationError(zodDetails(parsed.error));
 
-    const route = await resolveRoute(parsed.data.userId, parsed.data.agentId);
+    const { userId, agentId } = parsed.data;
+
+    // Sin agentId el gateway pide el primario (handshake WS / GET /v1/agents);
+    // con agentId, el agente concreto del proxy HTTP.
+    const route =
+      agentId === undefined
+        ? await resolvePrimaryRoute(userId)
+        : await resolveRoute(userId, agentId);
 
     // Decisión de diseño: el "no encontrado" NO es 404. Un 404 obligaría al
     // gateway a distinguir "el backend no tiene esta ruta" de "el agente no
