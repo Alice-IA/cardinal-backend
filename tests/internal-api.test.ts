@@ -3,8 +3,11 @@ import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fas
 import pino from 'pino';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildControlPlaneApp } from '../src/control-plane/app';
+import { createRedisTicketStore } from '../src/modules/tickets/store.redis';
 import { issueTicket, type TicketDeps } from '../src/modules/tickets/ticket.service';
 import { prisma } from '../src/config/prisma';
+import { env } from '../src/config/env';
+import { encryptToken } from '../src/utils/crypto';
 import { resetDb } from './helpers/db';
 import { seedTenantFixture, type TenantFixture } from './helpers/fixtures';
 import { FakeRedis } from './helpers/fake-redis';
@@ -34,6 +37,10 @@ const WRONG_TOKEN = `${INTERNAL_TOKEN.slice(0, -1)}${INTERNAL_TOKEN.endsWith('a'
 
 const CONSUME_URL = '/internal/tickets/consume';
 const ROUTE_URL = '/internal/route';
+const CREDENTIALS_URL = '/internal/credentials';
+
+const ENCRYPTION_KEY = Buffer.from(env.TOKEN_ENCRYPTION_KEY, 'base64');
+const CAPABILITY_TOKEN = 'capability-token-de-alice-para-el-gateway';
 
 let fixture: TenantFixture;
 let store: FakeRedis;
@@ -335,6 +342,244 @@ describe('internal API: POST /internal/route sin agentId (primario)', () => {
     expect(body).not.toHaveProperty('port');
     expect(body).not.toHaveProperty('nodeId');
     expect(body).not.toHaveProperty('internalHost');
+  });
+});
+
+describe('internal API: TicketStore Redis (adaptador sobre fake)', () => {
+  async function rebuildWith(deps: TicketDeps): Promise<void> {
+    await app.close();
+    app = buildControlPlaneApp({ ticketDeps: deps });
+    await app.ready();
+  }
+
+  function redisDeps(store: FakeRedis): TicketDeps {
+    return {
+      store: createRedisTicketStore(store),
+      secret: TICKET_SECRET,
+      now: () => NOW,
+      ttlSeconds: 30,
+    };
+  }
+
+  it('un ticket emitido con el store Redis se consume con el mismo store → 200', async () => {
+    const deps = redisDeps(new FakeRedis(() => NOW));
+    await rebuildWith(deps);
+
+    const { ticket } = await issueTicket(
+      {
+        userId: fixture.alice.id,
+        agentId: fixture.alice.primaryAgentId,
+        containerId: fixture.alice.containerId,
+      },
+      deps,
+    );
+
+    const response = await post(CONSUME_URL, { ticket });
+
+    expect(response.statusCode, 'el adaptador Redis debe canjear el ticket').toBe(200);
+    expect(response.json()).toEqual({
+      userId: fixture.alice.id,
+      agentId: fixture.alice.primaryAgentId,
+      containerId: fixture.alice.containerId,
+    });
+  });
+
+  it('el segundo consumo con el mismo store Redis → 409 TICKET_ALREADY_USED', async () => {
+    const deps = redisDeps(new FakeRedis(() => NOW));
+    await rebuildWith(deps);
+
+    const { ticket } = await issueTicket(
+      {
+        userId: fixture.alice.id,
+        agentId: fixture.alice.primaryAgentId,
+        containerId: fixture.alice.containerId,
+      },
+      deps,
+    );
+
+    expect((await post(CONSUME_URL, { ticket })).statusCode).toBe(200);
+
+    const second = await post(CONSUME_URL, { ticket });
+    expect(second.statusCode, 'el replay debe detectarse en Redis').toBe(409);
+    expect(second.json()).toMatchObject({ error: { code: 'TICKET_ALREADY_USED' } });
+  });
+
+  it('dos stores sobre el MISMO fake de Redis comparten el estado', async () => {
+    const redis = new FakeRedis(() => NOW);
+    const depsA = redisDeps(redis);
+    const depsB = redisDeps(redis);
+
+    const { ticket } = await issueTicket(
+      {
+        userId: fixture.alice.id,
+        agentId: fixture.alice.primaryAgentId,
+        containerId: fixture.alice.containerId,
+      },
+      depsA,
+    );
+
+    // El store A emitió (issueTicket no escribe) y el store B consume. Que el
+    // ticket valga demuestra que el adapter no guarda estado propio.
+    await rebuildWith(depsB);
+
+    const first = await post(CONSUME_URL, { ticket });
+    expect(first.statusCode, 'el ticket debe canjearse con otro adapter del mismo Redis').toBe(200);
+
+    // Y el replay con el mismo store B también se detecta: la reserva NX vive
+    // en el fake compartido, no en memoria del proceso.
+    const second = await post(CONSUME_URL, { ticket });
+    expect(second.statusCode, 'la reserva NX debe estar en Redis y ser compartida').toBe(409);
+  });
+});
+
+describe('internal API: POST /internal/credentials', () => {
+  async function seedCiphertext(ciphertext: string): Promise<void> {
+    await prisma.container.update({
+      where: { id: fixture.alice.containerId },
+      data: { tokenCiphertext: ciphertext },
+    });
+  }
+
+  /** Reconstruye la app con un logger capturable (access log + errores). */
+  async function rebuildWithCapturedLogs(logs: string[]): Promise<void> {
+    await app.close();
+    const stream = new Writable({
+      write(chunk, _encoding, callback) {
+        logs.push(String(chunk));
+        callback();
+      },
+    });
+    app = buildControlPlaneApp({
+      ticketDeps,
+      logger: pino({ level: 'debug' }, stream),
+    });
+    await app.ready();
+  }
+
+  it('sin X-Internal-Token responde 401 INTERNAL_UNAUTHORIZED', async () => {
+    const response = await post(
+      CREDENTIALS_URL,
+      { sandboxId: fixture.alice.containerId },
+      null,
+    );
+
+    expect(response.statusCode, 'las credenciales exigen el token interno').toBe(401);
+    expect(response.json()).toMatchObject({ error: { code: 'INTERNAL_UNAUTHORIZED' } });
+  });
+
+  it('con token interno incorrecto responde 401 INTERNAL_UNAUTHORIZED', async () => {
+    const response = await post(
+      CREDENTIALS_URL,
+      { sandboxId: fixture.alice.containerId },
+      WRONG_TOKEN,
+    );
+
+    expect(response.statusCode, 'un token interno incorrecto debe rechazarse').toBe(401);
+    expect(response.json()).toMatchObject({ error: { code: 'INTERNAL_UNAUTHORIZED' } });
+  });
+
+  it('un sandboxId inexistente responde 404 SANDBOX_NOT_FOUND', async () => {
+    const response = await post(CREDENTIALS_URL, { sandboxId: 'container-no-existe' });
+
+    expect(response.statusCode, 'un sandbox inexistente no es un error interno').toBe(404);
+    expect(response.json()).toMatchObject({ error: { code: 'SANDBOX_NOT_FOUND' } });
+  });
+
+  it('un contenedor con token_ciphertext NULL responde 404 SANDBOX_NOT_FOUND', async () => {
+    // El fixture no siembra token: es el caso de un contenedor provisionado
+    // antes de esta migración.
+    const response = await post(CREDENTIALS_URL, {
+      sandboxId: fixture.alice.containerId,
+    });
+
+    expect(response.statusCode, 'sin ciphertext no hay token que entregar').toBe(404);
+    expect(response.json()).toMatchObject({ error: { code: 'SANDBOX_NOT_FOUND' } });
+  });
+
+  it('un contenedor con ciphertext válido devuelve el token descifrado exacto', async () => {
+    await seedCiphertext(encryptToken(CAPABILITY_TOKEN, ENCRYPTION_KEY));
+
+    const response = await post(CREDENTIALS_URL, {
+      sandboxId: fixture.alice.containerId,
+    });
+
+    expect(response.statusCode, 'el token debe descifrarse').toBe(200);
+    expect(response.json()).toStrictEqual({ token: CAPABILITY_TOKEN });
+  });
+
+  it('sandboxId vacío responde 400 VALIDATION_ERROR', async () => {
+    const response = await post(CREDENTIALS_URL, { sandboxId: '' });
+
+    expect(response.statusCode, 'la cadena vacía no identifica un sandbox').toBe(400);
+    expect(response.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+  });
+
+  it('body sin sandboxId responde 400 VALIDATION_ERROR', async () => {
+    const response = await post(CREDENTIALS_URL, {});
+
+    expect(response.statusCode, 'sandboxId es obligatorio').toBe(400);
+    expect(response.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+  });
+
+  it('ciphertext corrupto responde 500 INTERNAL_ERROR sin filtrar datos', async () => {
+    const valid = encryptToken(CAPABILITY_TOKEN, ENCRYPTION_KEY);
+    const payload = Buffer.from(valid, 'base64url');
+    payload[payload.length - 1] = (payload[payload.length - 1] ?? 0) ^ 0xff;
+    const corrupt = payload.toString('base64url');
+    await seedCiphertext(corrupt);
+
+    const logs: string[] = [];
+    await rebuildWithCapturedLogs(logs);
+
+    const response = await post(CREDENTIALS_URL, {
+      sandboxId: fixture.alice.containerId,
+    });
+
+    expect(response.statusCode, 'un fallo de descifrado es un 500').toBe(500);
+    expect(response.json()).toMatchObject({ error: { code: 'INTERNAL_ERROR' } });
+
+    const body = response.body;
+    expect(body, 'la respuesta no debe filtrar el ciphertext').not.toContain(corrupt);
+    expect(body, 'la respuesta no debe filtrar la clave').not.toContain(
+      env.TOKEN_ENCRYPTION_KEY,
+    );
+
+    const joined = logs.join('\n');
+    expect(joined, 'el log no debe filtrar el ciphertext').not.toContain(corrupt);
+    expect(joined, 'el log no debe filtrar la clave').not.toContain(env.TOKEN_ENCRYPTION_KEY);
+  });
+
+  it('la respuesta 200 tiene exactamente la propiedad token', async () => {
+    await seedCiphertext(encryptToken(CAPABILITY_TOKEN, ENCRYPTION_KEY));
+
+    const response = await post(CREDENTIALS_URL, {
+      sandboxId: fixture.alice.containerId,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as Record<string, unknown>;
+    expect(Object.keys(body)).toStrictEqual(['token']);
+    expect(body).toStrictEqual({ token: CAPABILITY_TOKEN });
+  });
+
+  it('el capability token no aparece en los logs capturados', async () => {
+    const token = 'capability-token-que-nunca-debe-loguearse';
+    const ciphertext = encryptToken(token, ENCRYPTION_KEY);
+    await seedCiphertext(ciphertext);
+
+    const logs: string[] = [];
+    await rebuildWithCapturedLogs(logs);
+
+    const response = await post(CREDENTIALS_URL, {
+      sandboxId: fixture.alice.containerId,
+    });
+
+    expect(response.statusCode, 'la petición válida debe funcionar').toBe(200);
+    expect(response.json()).toStrictEqual({ token });
+
+    const joined = logs.join('\n');
+    expect(joined, 'el token nunca se loguea, ni completo ni truncado').not.toContain(token);
+    expect(joined, 'el ciphertext tampoco se loguea').not.toContain(ciphertext);
   });
 });
 

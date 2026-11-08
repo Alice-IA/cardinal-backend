@@ -10,6 +10,7 @@ export type ErrorCode =
   | 'FORBIDDEN'
   | 'NOT_FOUND'
   | 'SANDBOX_NOT_READY'
+  | 'SANDBOX_NOT_FOUND'
   | 'NODE_UNAVAILABLE'
   | 'CONNECTION_LIMIT'
   | 'TICKET_INVALID'
@@ -63,6 +64,9 @@ export const notFound = (message = 'Recurso no encontrado') =>
 
 export const sandboxNotReady = () =>
   new AppError('SANDBOX_NOT_READY', 409, 'El sandbox no está listo');
+
+export const sandboxNotFound = () =>
+  new AppError('SANDBOX_NOT_FOUND', 404, 'Sandbox no encontrado');
 
 export const nodeUnavailable = () =>
   new AppError('NODE_UNAVAILABLE', 503, 'El nodo no está disponible');

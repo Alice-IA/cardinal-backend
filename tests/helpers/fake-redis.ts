@@ -1,3 +1,4 @@
+import type { RedisLike } from '../../src/modules/tickets/store.redis';
 import type { TicketStore, TicketStoreSetOptions } from '../../src/modules/tickets/ticket.service';
 
 interface Entry {
@@ -9,8 +10,12 @@ interface Entry {
  * Fake mínimo de Redis para los tests de tickets. No hay Redis en CI todavía;
  * el contrato que importa (SET NX, TTL, claves) se verifica aquí. El servicio
  * real solo necesita implementar `TicketStore`.
+ *
+ * Implementa además la forma de `ioredis` (`set(key, value, 'EX', s, 'NX')`)
+ * para poder pasar el MISMO fake a `createRedisTicketStore` y comprobar que el
+ * estado vive en Redis y no en memoria del adapter.
  */
-export class FakeRedis implements TicketStore {
+export class FakeRedis implements TicketStore, RedisLike {
   private readonly data = new Map<string, Entry>();
 
   constructor(private readonly now: () => number = () => Date.now()) {}
@@ -22,11 +27,30 @@ export class FakeRedis implements TicketStore {
     }
   }
 
+  // Forma `TicketStore` (usada por consumeTicket y por el fake en tests).
+  set(key: string, value: string, options: TicketStoreSetOptions): Promise<'OK' | null>;
+  // Forma `ioredis` con NX (usada por createRedisTicketStore).
+  set(
+    key: string,
+    value: string,
+    mode: 'EX',
+    seconds: number,
+    nx: 'NX',
+  ): Promise<'OK' | null>;
+  // Forma `ioredis` sin NX: ioredis garantiza 'OK' (nunca null).
+  set(key: string, value: string, mode: 'EX', seconds: number): Promise<'OK'>;
   async set(
     key: string,
     value: string,
-    options: TicketStoreSetOptions,
+    optionsOrMode: TicketStoreSetOptions | 'EX',
+    seconds?: number,
+    nx?: 'NX',
   ): Promise<'OK' | null> {
+    const options: TicketStoreSetOptions =
+      optionsOrMode === 'EX'
+        ? { EX: seconds as number, ...(nx === 'NX' ? { NX: true } : {}) }
+        : optionsOrMode;
+
     this.purge();
     if (options.NX && this.data.has(key)) return null;
     this.data.set(key, {

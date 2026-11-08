@@ -30,9 +30,9 @@ afterAll(() => {
   rmSync(sandboxDir, { recursive: true, force: true });
 });
 
-function runEnvModuleWithoutInternalToken(): { status: number | null; stderr: string } {
+function runEnvModuleWithout(variable: string): { status: number | null; stderr: string } {
   const childEnv = { ...process.env };
-  delete childEnv.INTERNAL_TOKEN;
+  delete childEnv[variable];
 
   try {
     execFileSync(
@@ -49,11 +49,29 @@ function runEnvModuleWithoutInternalToken(): { status: number | null; stderr: st
 
 describe('config/env', () => {
   it('sin INTERNAL_TOKEN el proceso no arranca', () => {
-    const result = runEnvModuleWithoutInternalToken();
+    const result = runEnvModuleWithout('INTERNAL_TOKEN');
 
     expect(result.status, 'un deploy sin INTERNAL_TOKEN debe salir con código 1').toBe(1);
     expect(result.stderr, 'el error debe nombrar la variable que falta').toContain(
       'INTERNAL_TOKEN es obligatorio',
+    );
+  });
+
+  it('sin WS_TICKET_SECRET el proceso no arranca', () => {
+    const result = runEnvModuleWithout('WS_TICKET_SECRET');
+
+    expect(result.status, 'un deploy sin WS_TICKET_SECRET debe salir con código 1').toBe(1);
+    expect(result.stderr, 'el error debe nombrar la variable que falta').toContain(
+      'WS_TICKET_SECRET es obligatorio',
+    );
+  });
+
+  it('sin TOKEN_ENCRYPTION_KEY el proceso no arranca', () => {
+    const result = runEnvModuleWithout('TOKEN_ENCRYPTION_KEY');
+
+    expect(result.status, 'un deploy sin TOKEN_ENCRYPTION_KEY debe salir con código 1').toBe(1);
+    expect(result.stderr, 'el error debe nombrar la variable que falta').toContain(
+      'TOKEN_ENCRYPTION_KEY es obligatorio',
     );
   });
 });

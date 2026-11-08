@@ -29,11 +29,28 @@ const rawSchema = z.object({
   REFRESH_TOKEN_SECRET: secret('REFRESH_TOKEN_SECRET'),
   // Secreto compartido con cardinal-gateway para autenticar /internal/*.
   //
-  // Es el ÚNICO secreto que el gateway conoce. El `WS_TICKET_SECRET` (≥32
-  // bytes, pendiente de conectar cuando exista el store Redis) vive SOLO en
-  // el backend: el gateway ya no canjea tickets en proceso, los consume por
+  // Es el ÚNICO secreto que el gateway conoce. El `WS_TICKET_SECRET` vive SOLO
+  // en el backend: el gateway ya no canjea tickets en proceso, los consume por
   // HTTP contra /internal/tickets/consume. Tampoco tiene Redis.
   INTERNAL_TOKEN: secret('INTERNAL_TOKEN'),
+  // Redis del backend: reservas NX de tickets (ticket:used:<jti>).
+  // En `NODE_ENV=test` basta una URL ficticia: los tests inyectan FakeRedis.
+  // Nunca se loguea (puede contener credenciales en la URL).
+  REDIS_URL: z.url({ error: 'REDIS_URL es obligatorio' }),
+  // Clave HMAC de los tickets WS. Solo la conoce el backend.
+  WS_TICKET_SECRET: secret('WS_TICKET_SECRET'),
+  // Clave de cifrado del capability token en la BD: base64 de 32 bytes.
+  // Se valida la forma canónica (ida y vuelta base64) para no aceptar texto
+  // que Buffer.from(..., 'base64') "decodifique" ignorando caracteres.
+  TOKEN_ENCRYPTION_KEY: z
+    .string({ error: 'TOKEN_ENCRYPTION_KEY es obligatorio' })
+    .refine(
+      (value) => {
+        const decoded = Buffer.from(value, 'base64');
+        return decoded.length === 32 && decoded.toString('base64') === value;
+      },
+      { message: 'TOKEN_ENCRYPTION_KEY debe ser base64 de exactamente 32 bytes' },
+    ),
 });
 
 const parsed = rawSchema

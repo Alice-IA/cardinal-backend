@@ -55,6 +55,9 @@ model Container {
   wsSecretPath  String?  @map("ws_secret_path") @db.Text
   status        String   @default("creating") @db.Text
   errorMessage  String?  @map("error_message") @db.Text
+  // Capability token cifrado (AES-256-GCM), NULL en contenedores previos.
+  tokenCiphertext String? @map("token_ciphertext") @db.Text
+  tokenRotatedAt  DateTime? @map("token_rotated_at") @db.Timestamptz(6)
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
