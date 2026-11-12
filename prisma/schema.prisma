@@ -48,9 +48,11 @@ model Node {
 // Contenedores Docker aprovisionados por usuario
 // ─────────────────────────────────────────────────────────────
 model Container {
-  id            String   @id @db.Text           // sha256 del container id
+  id            String   @id @db.Text           // sandboxId público (containers.id)
   userId        String   @map("user_id") @db.Uuid
-  containerPort Int      @unique @map("container_port")
+  // Nullable: enqueueProvision crea la fila ANTES de que el manager devuelva
+  // el puerto real (el callback lo escribe). UNIQUE sigue aplicando a no-nulos.
+  containerPort Int?     @unique @map("container_port")
   nodeId        String?  @map("node_id") @db.Text
   wsSecretPath  String?  @map("ws_secret_path") @db.Text
   status        String   @default("creating") @db.Text
@@ -58,6 +60,18 @@ model Container {
   // Capability token cifrado (AES-256-GCM), NULL en contenedores previos.
   tokenCiphertext String? @map("token_ciphertext") @db.Text
   tokenRotatedAt  DateTime? @map("token_rotated_at") @db.Timestamptz(6)
+  // Aprovisionamiento (fase provision): el backend es la fuente de verdad.
+  jobId                 String?  @unique @map("job_id") @db.Text
+  provider              String   @default("docker") @db.Text
+  transport             String   @default("ws") @db.Text
+  tlsServername         String?  @map("tls_servername") @db.Text
+  // Los escribe el callback del manager (y la reconciliación al arrancar).
+  internalHost          String?  @map("internal_host") @db.Text
+  containerId           String?  @map("container_id") @db.Text
+  provisionAttempts     Int      @default(0) @map("provision_attempts") @db.Integer
+  agentCreationAttempts Int      @default(0) @map("agent_creation_attempts") @db.Integer
+  provisionError        String?  @map("provision_error") @db.Text
+  provisionErrorCode    String?  @map("provision_error_code") @db.Text
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)

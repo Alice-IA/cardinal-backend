@@ -20,6 +20,7 @@
   "license": "ISC",
   "dependencies": {
     "@fastify/websocket": "^11.2.0",
+    "@letta-ai/letta-agent-sdk": "^0.8.85",
     "@prisma/client": "6.19.3",
     "argon2": "^0.45.1",
     "cors": "^2.8.6",

@@ -51,6 +51,24 @@ const rawSchema = z.object({
       },
       { message: 'TOKEN_ENCRYPTION_KEY debe ser base64 de exactamente 32 bytes' },
     ),
+  // ── Aprovisionamiento (fase provision) ──────────────────────────────────
+  // URL del Sandbox Manager (servicio aparte; habla Docker y no toca Prisma).
+  // No es un secreto: el token interno viaja en el header.
+  MANAGER_URL: z
+    .url({ error: 'MANAGER_URL debe ser una URL' })
+    .default('http://sandbox-manager:8090'),
+  // Nombre del agente primario creado con el SDK.
+  AGENT_NAME: z.string().min(1).default('Alice'),
+  // Fuente del systemPrompt. Si es relativa se resuelve desde el archivo
+  // compilado (__dirname), NUNCA desde process.cwd(): el cwd cambia según
+  // cómo se arranque el proceso. Si no existe, el arranque falla.
+  AGENT_SYSTEM_PROMPT_PATH: z
+    .string()
+    .min(1)
+    .default('assets/alice-persona.md'),
+  // Timeout de las llamadas HTTP al manager (el manager tiene el suyo para
+  // deploy.sh).
+  PROVISION_TIMEOUT_MS: z.coerce.number().int().positive().default(180_000),
 });
 
 const parsed = rawSchema

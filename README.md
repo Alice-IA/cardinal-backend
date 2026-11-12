@@ -321,3 +321,65 @@ WHERE expires_at < now() - interval '7 days'
 ```
 
 Mantener una ventana de gracia permite auditar reusos recientes antes de borrar.
+
+---
+
+## Aprovisionamiento (fase provision)
+
+El **backend** es la única fuente de verdad del estado. El **Sandbox Manager**
+es un servicio aparte que solo habla Docker (ejecuta `alice-ops/scripts/deploy.sh`
+como subproceso) y no importa `@prisma/client`.
+
+Flujo:
+
+1. `enqueueProvision` genera `jobId` (UUID) + token de 32 bytes, cifra el token
+   (`token_ciphertext`) y crea `containers` en `provisioning`. Devuelve en <100 ms.
+2. `runProvision` (background) hace `POST /provision` al manager y espera el
+   callback. Los fallos del manager incrementan SOLO `provision_attempts`
+   (backoff 1 s / 4 s / 16 s; a los 3 → `error` + `MANAGER_UNAVAILABLE`).
+3. El manager ejecuta `deploy.sh --json --node <nodo>` con el hash por **env**
+   (nunca por argv) y llama a `POST /internal/provision/ready`.
+4. `onManagerCallback` escribe la conexión y crea el agente con el SDK. Los
+   fallos del agente incrementan SOLO `agent_creation_attempts` (3 intentos;
+   si se agotan → `agent_failed` + `AGENT_CREATION_FAILED`, sin borrar el
+   contenedor).
+5. `POST /internal/provision/:jobId/retry` (decisión C) genera un `jobId` nuevo
+   y regenera el token para recrear contenedor + agente.
+
+### Cola y locks: en memoria (una réplica)
+
+La cola es `setImmediate` + un `Map` de locks por `jobId`. Sirve para **un solo
+proceso**: evita dobles ejecuciones dentro del proceso y el
+`UPDATE ... WHERE status = 'provisioning'` es la red de seguridad entre
+procesos. **Con réplicas del backend hace falta mover la cola y los locks a
+Redis** (por ejemplo `SET NX` con TTL por `jobId`); no se implementa aquí a
+propósito.
+
+### Backend caído entre el 202 y el callback
+
+La fila queda `provisioning`. Al arrancar, `reconcileOnStartup` consulta
+`GET /provision/:jobId`:
+
+- `ready` → ejecuta el paso del agente y pasa a `running`.
+- `failed` → `error`.
+- `unknown` (el manager reinició y perdió su Map) → consulta
+  `GET /provision/orphans`; si el contenedor con label `alice.jobId` existe,
+  re-encola `runProvision`; si no, `error` + `JOB_LOST`.
+
+El reporte `{ recovered, failed, orphaned }` se loguea con agregados y jobIds;
+**nunca** tokens.
+
+### Persona
+
+`AGENT_SYSTEM_PROMPT_PATH` (default `assets/alice-persona.md`) se resuelve
+desde el archivo compilado (`__dirname`), no desde `process.cwd()`. Si el
+archivo falta, el proceso no arranca y no sirve provisiones; no hay placeholder.
+Se loguea `{ chars }`, nunca el contenido.
+
+> **Estado:** el backend de este bloque está implementado y probado
+> (`tests/provision.test.ts`, `tests/agent-factory.test.ts`,
+> `tests/internal-api.test.ts`). El servicio `sandbox-manager/` NO se implementa
+> todavía: el checkout local de `alice-ops` no expone el contrato documentado
+> (`ALICE_JOB_ID`, `containerName`, labels `alice.jobId`), así que primero hay
+> que alinear la versión canónica.
+

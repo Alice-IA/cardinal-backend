@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { env } from '../../config/env';
 import { requireInternalToken } from '../../middlewares/internal-auth.middleware';
 import { resolvePrimaryRoute, resolveRoute } from '../agents/ownership.service';
+import { onManagerCallback, retryProvision, type ProvisionDeps } from '../provision/provision.service';
 import { readCapabilityToken } from '../sandbox/credentials.service';
 import { consumeTicket, type TicketDeps } from '../tickets/ticket.service';
 import { TokenDecryptionError } from '../../utils/crypto';
@@ -33,6 +34,25 @@ const credentialsBody = z.object({
   sandboxId: z.string().min(1, 'sandboxId es obligatorio'),
 });
 
+/**
+ * Callback del Sandbox Manager. `jobId` es el UUID que generó el backend y el
+ * manager devuelve tal cual (decisión A).
+ *
+ * `port` llega como número; `z.coerce.number` tolera un JSON que lo traiga
+ * como string sin relajar el rango.
+ */
+const provisionCallbackBody = z.object({
+  jobId: z.uuid('jobId debe ser un UUID'),
+  ok: z.boolean(),
+  containerName: z.string().min(1).optional(),
+  internalHost: z.string().min(1).optional(),
+  port: z.coerce.number().int().min(1).max(65535).optional(),
+  transport: z.enum(['ws', 'wss']).optional(),
+  containerId: z.string().min(1).optional(),
+  code: z.string().min(1).optional(),
+  message: z.string().optional(),
+});
+
 function zodDetails(error: z.ZodError): ErrorDetail[] {
   return error.issues.map((issue) => ({
     field: issue.path.length > 0 ? issue.path.join('.') : '(body)',
@@ -43,6 +63,19 @@ function zodDetails(error: z.ZodError): ErrorDetail[] {
 export interface InternalRoutesOptions {
   /** Store + secreto HMAC + reloj que necesita `consumeTicket`. */
   ticketDeps: TicketDeps;
+  /**
+   * Dependencias del bloque de aprovisionamiento. Opcionales para que los
+   * tests de las rutas anteriores puedan construir el control plane sin
+   * manager; si faltan, las rutas de provisión responden 503 (nunca 404).
+   */
+  provisionDeps?: ProvisionDeps;
+}
+
+function requireProvisionDeps(options: InternalRoutesOptions): ProvisionDeps {
+  if (!options.provisionDeps) {
+    throw new AppError('INTERNAL_ERROR', 503, 'Aprovisionamiento no configurado');
+  }
+  return options.provisionDeps;
 }
 
 export function registerInternalRoutes(
@@ -107,4 +140,58 @@ export function registerInternalRoutes(
     // existe o es de otro usuario". La petición es válida → 200 con el motivo.
     return route ?? { error: 'NOT_FOUND' };
   });
+
+  // ── Aprovisionamiento ───────────────────────────────────────────────────
+  // `/internal/provision/ready` es de uso EXCLUSIVO del Sandbox Manager, pero
+  // comparte el MISMO INTERNAL_TOKEN que el resto de /internal/*. El gateway
+  // no debe llamarlo.
+  app.post(
+    '/internal/provision/ready',
+    { preHandler: requireInternalToken },
+    async (request) => {
+      const deps = requireProvisionDeps(options);
+
+      const parsed = provisionCallbackBody.safeParse(request.body);
+      if (!parsed.success) throw validationError(zodDetails(parsed.error));
+
+      // Idempotente: un jobId desconocido o ya cerrado responde 200 sin hacer
+      // nada (el manager puede reintentar el callback).
+      await onManagerCallback(parsed.data, deps);
+      return { ok: true };
+    },
+  );
+
+  // Proxy de diagnóstico. El backend autentica al manager con su propio
+  // X-Internal-Token; el token del llamante no se reenvía.
+  app.get(
+    '/internal/provision/:jobId',
+    { preHandler: requireInternalToken },
+    async (request) => {
+      const deps = requireProvisionDeps(options);
+      const { jobId } = request.params as { jobId: string };
+
+      try {
+        return await deps.manager.get(jobId);
+      } catch (error) {
+        // El cliente del manager no incluye token en sus errores.
+        request.log.error({ err: error, jobId }, 'fallo al consultar el manager');
+        throw new AppError('UPSTREAM_ERROR', 502, 'El manager no respondió');
+      }
+    },
+  );
+
+  // Decisión C: al agotar los reintentos del agente, este endpoint crea un
+  // jobId nuevo y regenera el token (el contenedor se recrea).
+  app.post(
+    '/internal/provision/:jobId/retry',
+    { preHandler: requireInternalToken },
+    async (request, reply) => {
+      const deps = requireProvisionDeps(options);
+      const { jobId } = request.params as { jobId: string };
+
+      const result = await retryProvision(jobId, deps);
+      reply.code(202);
+      return result;
+    },
+  );
 }

@@ -5,6 +5,13 @@ import { app } from './app';
 import { env } from './config/env';
 import { prisma } from './config/prisma';
 import { buildControlPlaneApp } from './control-plane/app';
+import { defaultAgentFactory } from './modules/provision/agent-factory';
+import { createManagerClient } from './modules/provision/manager-client';
+import {
+  reconcileOnStartup,
+  type ProvisionDeps,
+} from './modules/provision/provision.service';
+import { loadSystemPrompt } from './modules/provision/system-prompt';
 import { createRedisTicketStore } from './modules/tickets/store.redis';
 import type { TicketDeps } from './modules/tickets/ticket.service';
 import { logger } from './utils/logger';
@@ -49,9 +56,12 @@ function isInternalPath(url: string | undefined): boolean {
 export async function buildHttpServer(
   ticketDeps: TicketDeps,
   controlPlaneLogger?: FastifyServerOptions['loggerInstance'],
+  provisionDeps?: ProvisionDeps,
 ): Promise<BuiltHttpServer> {
   const controlPlane = buildControlPlaneApp(
-    controlPlaneLogger ? { ticketDeps, logger: controlPlaneLogger } : { ticketDeps },
+    controlPlaneLogger
+      ? { ticketDeps, provisionDeps, logger: controlPlaneLogger }
+      : { ticketDeps, provisionDeps },
   );
   await controlPlane.ready();
 
@@ -85,6 +95,12 @@ export async function buildHttpServer(
  * `now` se deja en su default (Date.now).
  */
 export async function startServer(): Promise<void> {
+  // La persona de Alice es un archivo del repo y es OBLIGATORIA: si no existe,
+  // el proceso no arranca y no sirve provisiones (no hay placeholder). Solo se
+  // loguea la longitud, nunca el contenido.
+  const systemPrompt = loadSystemPrompt(env.AGENT_SYSTEM_PROMPT_PATH);
+  logger.info({ chars: systemPrompt.length }, 'persona de Alice cargada');
+
   const redis = new Redis(env.REDIS_URL);
 
   // ioredis emite 'error' como evento: sin listener, Node lo convierte en un
@@ -98,10 +114,33 @@ export async function startServer(): Promise<void> {
     secret: env.WS_TICKET_SECRET,
   };
 
-  const built = await buildHttpServer(ticketDeps, logger);
+  const provisionDeps: ProvisionDeps = {
+    prisma,
+    manager: createManagerClient({
+      baseUrl: env.MANAGER_URL,
+      internalToken: env.INTERNAL_TOKEN,
+      timeoutMs: env.PROVISION_TIMEOUT_MS,
+    }),
+    agentFactory: defaultAgentFactory,
+    encryptionKey: Buffer.from(env.TOKEN_ENCRYPTION_KEY, 'base64'),
+    logger,
+    systemPrompt,
+  };
+
+  const built = await buildHttpServer(ticketDeps, logger, provisionDeps);
   built.server.listen(env.PORT, () => {
     logger.info({ port: env.PORT, env: env.NODE_ENV }, 'servidor escuchando');
   });
+
+  // Reconciliación al arrancar: cubre el backend muerto entre el 202 y el
+  // callback, y el manager que perdió su Map en memoria. No bloquea el listen.
+  void reconcileOnStartup(provisionDeps)
+    .then((report) => {
+      logger.info(report, 'reconciliación inicial completada');
+    })
+    .catch((error: unknown) => {
+      logger.error({ err: error }, 'falló la reconciliación inicial');
+    });
 
   registerShutdown(built, redis);
 }

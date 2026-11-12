@@ -14,6 +14,7 @@ import Fastify, {
   type FastifyServerOptions,
 } from 'fastify';
 import { registerInternalRoutes } from '../modules/internal/internal.routes';
+import type { ProvisionDeps } from '../modules/provision/provision.service';
 import type { TicketDeps } from '../modules/tickets/ticket.service';
 import { AppError } from '../utils/errors';
 
@@ -83,6 +84,12 @@ export interface ControlPlaneOptions {
    * debe verse al construir la app, no cuando alguien reutiliza un ticket.
    */
   ticketDeps: TicketDeps;
+  /**
+   * Dependencias del bloque de aprovisionamiento. Opcionales para construir el
+   * control plane en tests de otras superficies; sin ellas las rutas de
+   * provisión responden 503 y el resto de /internal/* sigue igual.
+   */
+  provisionDeps?: ProvisionDeps;
   /** Logger ya construido (p. ej. pino); desactivado por defecto. */
   logger?: FastifyServerOptions['loggerInstance'];
 }
@@ -149,7 +156,10 @@ export function buildControlPlaneApp(options: ControlPlaneOptions): FastifyInsta
     });
   });
 
-  registerInternalRoutes(app, { ticketDeps: options.ticketDeps });
+  registerInternalRoutes(app, {
+    ticketDeps: options.ticketDeps,
+    provisionDeps: options.provisionDeps,
+  });
 
   app.setNotFoundHandler((_request, reply) =>
     reply.code(501).send({
