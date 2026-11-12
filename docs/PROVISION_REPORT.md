@@ -4,15 +4,33 @@ Fecha: 2026-11-12. Repo: `cardinal-backend` (rama `test/fase-0a`).
 
 ## Estado
 
-- Backend de provision implementado y probado: **25 tests nuevos verdes**
-  (`provision.test.ts` 16, `agent-factory.test.ts` 6, `internal-api.test.ts` +3).
-- Suite completa: **42 failed | 148 passed | 5 todo (195)**. Los 42 rojos son
+- Backend de provision implementado y probado: **27 tests nuevos verdes**
+  (`provision.test.ts` 18, `agent-factory.test.ts` 6, `internal-api.test.ts` +3).
+- Suite completa: **42 failed | 150 passed | 5 todo (197)**. Los 42 rojos son
   exactamente los 5 archivos preexistentes (`gateway-ws`, `gateway-http`,
   `contract-http`, `openapi`, `sandbox-manager` de fase 0); no cambió ninguno.
 - `npx tsc --noEmit` → exit 0.
 - **Sandbox Manager NO implementado**: el `alice-ops` local no cumple el
   contrato documentado (ver más abajo). Queda bloqueado hasta alinear la
   versión canónica.
+
+### Correcciones del turno 2 (posteriores al primer reporte)
+
+1. **Hash del STRING (no de los bytes)**: `enqueueProvision` y `runProvision`
+   calculan `sha256(utf8(tokenString))` sobre el string de 43 chars que viaja en
+   `Authorization: Bearer <token>`. La BD cifra ese mismo string. Se añadió test
+   de integración cruzada: descifrar BD → `S`; `sha256(utf8 S)` === hash que
+   recibió el fake del manager, y comprobar que **no** coincide con
+   `sha256(bytes crudos)`. README actualizado.
+2. **`container_port` sin UNIQUE**: migración
+   `20261112010000_container_port_not_unique` con
+   `DROP CONSTRAINT IF EXISTS` + `DROP INDEX IF EXISTS "containers_container_port_key"`
+   (nombre real verificado en `pg_indexes`: era un índice único, no un
+   constraint). Test nuevo: dos containers con `container_port=4500` e
+   `internal_host` distinto conviven en INSERT y UPDATE.
+
+Resultado tras correcciones: `provision.test.ts` **18/18**,
+`agent-factory.test.ts` **6/6**, `internal-api.test.ts` **37/37** → **61/61**.
 
 ## Paso 0
 
@@ -156,7 +174,7 @@ No pending migrations to apply.
    Duration  72.46s
 ```
 
-## Tests nuevos: verde
+## Tests nuevos: verde (antes de las correcciones del turno 2; 59)
 
 ```
  RUN  v5.0.5 C:/Users/52452/Documents/Development/AliceAI/cardinal-backend
@@ -198,26 +216,47 @@ No pending migrations to apply.
    Duration  66.99s
 ```
 
+## Verde tras las correcciones del turno 2
+
+```
+$ npx vitest run tests/provision.test.ts tests/agent-factory.test.ts tests/internal-api.test.ts
+
+ ✓ tests/internal-api.test.ts (37 tests)
+ ✓ tests/provision.test.ts (18 tests)
+   ✓ enqueueProvision (3)
+     ✓ crea la fila provisioning y devuelve jobId en <100 ms sin esperar al manager
+     ✓ el string descifrado tiene 43 chars y su sha256 utf8 (64) coincide con el del manager
+     ✓ integración cruzada: descifrar la BD → string S y sha256(utf8 S) === hash del manager
+   ✓ esquema: container_port sin UNIQUE (1)
+     ✓ dos containers con container_port=4500 e internal_host distinto conviven (INSERT y UPDATE)
+   (resto de grupos: runProvision 3, onManagerCallback 4, contadores 2, retry 1, reconcile 4)
+ ✓ tests/agent-factory.test.ts (6 tests)
+
+ Test Files  3 passed (3)
+      Tests  61 passed (61)
+   Duration  67.07s
+```
+
 ## Suite completa
 
 ```
  Test Files  5 failed | 16 passed (21)
-      Tests  42 failed | 148 passed | 5 todo (195)
-   Duration  179.56s
+      Tests  42 failed | 150 passed | 5 todo (197)
+   Duration  178.52s
 
- ❯ tests/gateway-ws.test.ts (12 tests | 12 failed) 12189ms
- ❯ tests/contract-http.test.ts (10 tests | 10 failed) 9550ms
- ❯ tests/gateway-http.test.ts (8 tests | 8 failed) 8252ms
- ❯ tests/sandbox-manager.test.ts (11 tests | 7 failed | 4 todo) 6308ms
- ❯ tests/openapi.test.ts (5 tests | 5 failed) 32ms
+ ❯ tests/gateway-ws.test.ts (12 tests | 12 failed) 11758ms
+ ❯ tests/contract-http.test.ts (10 tests | 10 failed) 9148ms
+ ❯ tests/gateway-http.test.ts (8 tests | 8 failed) 8228ms
+ ❯ tests/sandbox-manager.test.ts (11 tests | 7 failed | 4 todo) 5982ms
+ ❯ tests/openapi.test.ts (5 tests | 5 failed) 39ms
  ✓ tests/internal-api.test.ts (37 tests)
- ✓ tests/provision.test.ts (16 tests)
+ ✓ tests/provision.test.ts (18 tests)
  ✓ tests/agent-factory.test.ts (6 tests)
  (resto de archivos verdes)
 ```
 
 Baseline antes del bloque: **42 failed | 123 passed | 5 todo (170)**. Después:
-**42 failed | 148 passed | 5 todo (195)**. Mismos 5 archivos rojos; +25 tests
+**42 failed | 150 passed | 5 todo (197)**. Mismos 5 archivos rojos; +27 tests
 nuevos verdes. `tests/sandbox-manager.test.ts` de fase 0 **no se reemplazó**
 (manager bloqueado): sigue con 7 rojos + 4 todo.
 
@@ -225,17 +264,18 @@ nuevos verdes. `tests/sandbox-manager.test.ts` de fase 0 **no se reemplazó**
 
 | Archivo | Qué hace | Tests |
 | --- | --- | --- |
-| `prisma/migrations/20261112000000_provision/migration.sql` | job_id UNIQUE, provider, transport, tls_servername, internal_host, container_id, 2 contadores, errores; container_port nullable; CHECK de status ampliado conservando `creating` | soporte de 1-16 |
+| `prisma/migrations/20261112000000_provision/migration.sql` | job_id UNIQUE, provider, transport, tls_servername, internal_host, container_id, 2 contadores, errores; container_port nullable; CHECK de status ampliado conservando `creating` | soporte de 1-18 |
+| `prisma/migrations/20261112010000_container_port_not_unique/migration.sql` | elimina el índice único `containers_container_port_key` (puerto interno compartido del nodo) | test de esquema (2 containers con 4500) |
 | `prisma/schema.prisma` | modelo `Container` con las columnas nuevas | — |
 | `src/config/env.ts` | `MANAGER_URL`, `AGENT_NAME`, `AGENT_SYSTEM_PROMPT_PATH`, `PROVISION_TIMEOUT_MS` | `env.test.ts` 3/3 sigue verde |
 | `src/modules/provision/system-prompt.ts` | carga `assets/alice-persona.md` desde `__dirname`; falla si no existe | 30, 32 |
 | `src/modules/provision/agent-factory.ts` | `createAgentOnSandbox` (backend remote + ws), `normalizeProvisionError` | 28-33 |
 | `src/modules/provision/manager-client.ts` | cliente HTTP del manager con `X-Internal-Token`; 404 → `unknown` | 36 (proxy), usado por 3-5, 13-16 |
-| `src/modules/provision/provision.service.ts` | enqueue, runProvision, callback, reconciliación, retry; dos contadores | 1-16 |
+| `src/modules/provision/provision.service.ts` | enqueue, runProvision, callback, reconciliación, retry; dos contadores; hash del STRING | 1-18 |
 | `src/modules/internal/internal.routes.ts` | `/internal/provision/ready`, `GET /:jobId`, `POST /:jobId/retry` | 12, 34-36 |
 | `src/control-plane/app.ts` | inyección opcional de `provisionDeps` | 34-36 |
 | `src/server.ts` | carga persona al arrancar (`{chars}`), manager client, reconciliación | `server-bootstrap` 3/3 verde |
-| `tests/provision.test.ts` | 16 tests del worker/callback/reconcile/retry | — |
+| `tests/provision.test.ts` | 18 tests del worker/callback/reconcile/retry/hash-string/puerto | — |
 | `tests/agent-factory.test.ts` | 6 tests del SDK/persona/normalizador | — |
 | `tests/internal-api.test.ts` | +3 tests de las rutas internas (37 total) | — |
 | `README.md`, `.env.example` | flujo, cola/Redis, reconciliación, env nuevas | — |
@@ -268,17 +308,17 @@ nuevos verdes. `tests/sandbox-manager.test.ts` de fase 0 **no se reemplazó**
    `provisioning`, `agent_failed`, `removing`.
 7. **tls_servername**: el callback documentado no lo trae; se deriva
    `wss → internalHost`, `ws → null`.
-8. **Token**: 32 bytes crudos (`randomBytes(32)`), se cifra su representación
-   base64url y el hash que viaja al manager es `sha256(bytes crudos)` hex de 64.
-   El sandbox que valide `WS_TOKEN_SHA256` debe decodificar base64url antes de
-   hashear; si no, hay que fijar otra codificación (riesgo de integración).
+8. **Token**: `tokenString = randomBytes(32).toString('base64url')` (43 chars).
+   Se cifra ese MISMO string y `WS_TOKEN_SHA256 = sha256(utf8(tokenString))`.
+   Letta hashea el string que recibe en `Authorization: Bearer`; no se hashean
+   los 32 bytes crudos. Test de integración cruzada en `provision.test.ts`.
 
 ## Riesgos / pendientes
 
-- **`container_port` UNIQUE**: el manager devuelve `SANDBOX_PORT` del nodo
-  (p. ej. 4500) para todos los sandboxes del nodo. El UNIQUE puede estallar al
-  segundo callback con el mismo puerto. Propuesta: quitar el UNIQUE (o pasar a
-  `(node_id, container_port)`) en una migración aparte, con firma.
+- **`container_port` UNIQUE — resuelto en el turno 2**: se eliminó el índice
+  único (`20261112010000_container_port_not_unique`). Era el puerto interno del
+  nodo (4500) compartido; el segundo callback ya no rompe. Si algún día se
+  publican puertos, el UNIQUE volvería a importar.
 - **Nodo por defecto**: `enqueueProvision` usa el primer nodo `status='up'` por
   id; el manager usa `ALICE_NODE`. Pueden divergir. Propuesta: env
   `DEFAULT_NODE_ID` o derivarlo del manager.
@@ -291,23 +331,17 @@ nuevos verdes. `tests/sandbox-manager.test.ts` de fase 0 **no se reemplazó**
 
 ## Git
 
-No se ejecutó `git add`, `git commit`, `git push` ni `git reset`. Solo
-lectura (`status`, `log`, `diff`). El árbol queda con los cambios del bloque
-sin commitear:
+No se ejecutó `git add`, `git commit`, `git push` ni `git reset`. Solo lectura
+(`status`, `log`, `diff`). Jesús commiteó el bloque del turno 1 en
+`6d782cf feat(provision): worker, callback, reconciliación y creación del agente`.
+El turno 2 (correcciones) queda sin commitear:
 
 ```
- M .env.example
+ M PROVISION_REPORT.md
  M README.md
- M package-lock.json
- M package.json
  M prisma/schema.prisma
- M src/config/env.ts
- M src/control-plane/app.ts
- M src/modules/internal/internal.routes.ts
- M src/server.ts
- M tests/internal-api.test.ts
-?? prisma/migrations/20261112000000_provision/
-?? src/modules/provision/
-?? tests/agent-factory.test.ts
-?? tests/provision.test.ts
+ M src/modules/provision/manager-client.ts
+ M src/modules/provision/provision.service.ts
+ M tests/provision.test.ts
+?? prisma/migrations/20261112010000_container_port_not_unique/
 ```
