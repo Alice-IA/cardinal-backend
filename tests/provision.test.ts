@@ -32,8 +32,8 @@ import { makeTicketDeps } from './helpers/ticket-deps';
  *
  * Reglas que fijan estos tests:
  * - enqueue NO espera al manager (<100 ms); el trabajo corre en background.
- * - el sha256 que recibe el manager es hex de 64 sobre los 32 bytes crudos,
- *   nunca sobre base64/hex del token.
+ * - el sha256 que recibe el manager es hex de 64 sobre el STRING utf8 del
+ *   token (`Authorization: Bearer <token>`), no sobre los 32 bytes crudos.
  * - DOS contadores separados: provision_attempts (manager) y
  *   agent_creation_attempts (createAgent). Tres fallos del agente NO pueden
  *   parecer tres fallos del manager.
@@ -179,8 +179,8 @@ async function seedContainer(
   };
 }
 
-function sha256Hex(bytes: Buffer): string {
-  return createHash('sha256').update(bytes).digest('hex');
+function sha256HexOfString(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
 describe('enqueueProvision', () => {
@@ -201,7 +201,7 @@ describe('enqueueProvision', () => {
     expect(row?.tokenCiphertext, 'token_ciphertext se escribe antes de llamar al manager').toBeTruthy();
   });
 
-  it('el token descifrado son 32 bytes y su sha256 hex (64) coincide con el del manager', async () => {
+  it('el string descifrado tiene 43 chars y su sha256 utf8 (64) coincide con el del manager', async () => {
     const manager = makeManager();
     const deps = makeDeps({ manager });
 
@@ -212,17 +212,42 @@ describe('enqueueProvision', () => {
     });
 
     const row = await prisma.container.findUnique({ where: { jobId } });
-    const plaintext = decryptToken(row!.tokenCiphertext!, ENCRYPTION_KEY);
-    const rawBytes = Buffer.from(plaintext, 'base64url');
+    const tokenString = decryptToken(row!.tokenCiphertext!, ENCRYPTION_KEY);
 
-    expect(rawBytes, 'el token son 32 bytes crudos').toHaveLength(32);
+    expect(tokenString, 'el token es el string de 43 chars (base64url)').toMatch(
+      /^[A-Za-z0-9_-]{43}$/,
+    );
+    expect(
+      Buffer.from(tokenString, 'base64url'),
+      'el string decodifica a 32 bytes',
+    ).toHaveLength(32);
 
     const received = manager.provisionCalls[0]!.tokenSha256;
     expect(received, 'sha256 hex de 64 caracteres').toMatch(/^[0-9a-f]{64}$/);
-    expect(received, 'sha256 sobre los bytes crudos, no sobre base64/hex').toBe(
-      sha256Hex(rawBytes),
+    expect(received, 'sha256 del STRING utf8, no de los bytes crudos').toBe(
+      sha256HexOfString(tokenString),
     );
     expect(manager.provisionCalls[0]!.sandboxId, 'sandboxId es containers.id').toBe(row!.id);
+  });
+
+  it('integración cruzada: descifrar la BD → string S y sha256(utf8 S) === hash del manager', async () => {
+    const manager = makeManager();
+    const deps = makeDeps({ manager });
+
+    const { jobId } = await enqueueProvision(userId, deps);
+    await vi.waitFor(() => expect(manager.provision).toHaveBeenCalledTimes(1), {
+      timeout: 5_000,
+    });
+
+    const row = await prisma.container.findUnique({ where: { jobId } });
+    const storedString = decryptToken(row!.tokenCiphertext!, ENCRYPTION_KEY);
+    const expected = createHash('sha256').update(storedString, 'utf8').digest('hex');
+
+    expect(manager.provisionCalls[0]!.tokenSha256).toBe(expected);
+    // Regresión de la corrección: NO es el hash de los 32 bytes crudos.
+    expect(expected).not.toBe(
+      createHash('sha256').update(Buffer.from(storedString, 'base64url')).digest('hex'),
+    );
   });
 });
 
@@ -553,5 +578,41 @@ describe('reconcileOnStartup', () => {
     expect(joined, 'el token completo no aparece').not.toContain(tokenString);
     expect(joined, 'el token truncado tampoco').not.toContain(tokenString.slice(0, 12));
     expect(logs.join('\n'), 'el log sí debe registrar el reporte').toContain('reconcil');
+  });
+});
+
+describe('esquema: container_port sin UNIQUE', () => {
+  it('dos containers con container_port=4500 e internal_host distinto conviven (INSERT y UPDATE)', async () => {
+    const base = { userId, nodeId, status: 'running' as const };
+
+    const first = await prisma.container.create({
+      data: {
+        ...base,
+        id: randomUUID(),
+        jobId: randomUUID(),
+        containerPort: 4500,
+        internalHost: 'sandbox-a',
+      },
+    });
+    const second = await prisma.container.create({
+      data: {
+        ...base,
+        id: randomUUID(),
+        jobId: randomUUID(),
+        containerPort: 4501,
+        internalHost: 'sandbox-b',
+      },
+    });
+
+    expect(first.containerPort).toBe(4500);
+
+    // UPDATE del puerto al mismo valor: antes violaba el UNIQUE.
+    const updated = await prisma.container.update({
+      where: { id: second.id },
+      data: { containerPort: 4500 },
+    });
+
+    expect(updated.containerPort).toBe(4500);
+    expect(await prisma.container.count({ where: { containerPort: 4500 } })).toBe(2);
   });
 });

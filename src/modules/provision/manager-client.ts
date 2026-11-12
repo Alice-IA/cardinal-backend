@@ -16,7 +16,7 @@ export interface ManagerProvisionRequest {
   jobId: string;
   sandboxId: string;
   userId: string;
-  /** SHA-256 hex (64) de los 32 bytes crudos del token. */
+  /** SHA-256 hex (64) del STRING utf8 que viaja en Authorization: Bearer. */
   tokenSha256: string;
 }
 

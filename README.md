@@ -332,8 +332,9 @@ como subproceso) y no importa `@prisma/client`.
 
 Flujo:
 
-1. `enqueueProvision` genera `jobId` (UUID) + token de 32 bytes, cifra el token
-   (`token_ciphertext`) y crea `containers` en `provisioning`. Devuelve en <100 ms.
+1. `enqueueProvision` genera `jobId` (UUID) + un token **string** de 43 chars
+   (base64url de 32 bytes), cifra ese string (`token_ciphertext`) y crea
+   `containers` en `provisioning`. Devuelve en <100 ms.
 2. `runProvision` (background) hace `POST /provision` al manager y espera el
    callback. Los fallos del manager incrementan SOLO `provision_attempts`
    (backoff 1 s / 4 s / 16 s; a los 3 → `error` + `MANAGER_UNAVAILABLE`).
@@ -345,6 +346,18 @@ Flujo:
    contenedor).
 5. `POST /internal/provision/:jobId/retry` (decisión C) genera un `jobId` nuevo
    y regenera el token para recrear contenedor + agente.
+
+### Hash del token (string, no bytes)
+
+`WS_TOKEN_SHA256` es `sha256(utf8(tokenString))` del **string de 43 chars**
+que viaja en `Authorization: Bearer <token>`; **NO** es el hash de los 32 bytes
+crudos. La BD guarda `encryptToken(tokenString)`, es decir, el mismo string que
+se envía. Letta calcula el hash del string que recibe, así que el sandbox debe
+hashear el header tal cual, sin decodificar base64url.
+
+`containers.container_port` **no es UNIQUE**: es el puerto interno del nodo
+(p. ej. 4500) y se comparte entre todos los sandboxes de ese nodo; no se publica
+en el host. Si algún día se publican puertos, el UNIQUE volvería a importar.
 
 ### Cola y locks: en memoria (una réplica)
 

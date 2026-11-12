@@ -58,8 +58,14 @@ const BACKOFF_MS = [1_000, 4_000, 16_000] as const;
 /** Lock en memoria por jobId: evita doble ejecución dentro del proceso. */
 const inFlight = new Map<string, Promise<void>>();
 
-function sha256Hex(bytes: Buffer): string {
-  return createHash('sha256').update(bytes).digest('hex');
+/**
+ * SHA-256 del STRING que viaja en `Authorization: Bearer <token>`.
+ *
+ * Letta hashea `utf8(tokenString)`. NO es el hash de los 32 bytes crudos: el
+ * token en BD es el mismo string de 43 chars (base64url de 32 bytes).
+ */
+function sha256HexOfToken(tokenString: string): string {
+  return createHash('sha256').update(tokenString, 'utf8').digest('hex');
 }
 
 function sleep(ms: number): Promise<void> {
@@ -90,11 +96,11 @@ export async function enqueueProvision(
 ): Promise<{ jobId: string }> {
   const jobId = randomUUID();
 
-  // El token son 32 bytes crudos. El hash que viaja al manager es SIEMPRE
-  // sha256(bytes crudos) en hex de 64; nunca sobre base64 ni sobre hex.
-  const tokenBytes = randomBytes(32);
-  const tokenString = tokenBytes.toString('base64url');
-  const tokenSha256 = sha256Hex(tokenBytes);
+  // El token es el STRING de 43 chars (base64url de 32 bytes) que viaja en
+  // `Authorization: Bearer`; el hash es `sha256(utf8(tokenString))`, NO el de
+  // los bytes crudos. Se cifra exactamente ese string.
+  const tokenString = randomBytes(32).toString('base64url');
+  const tokenSha256 = sha256HexOfToken(tokenString);
   void tokenSha256; // runProvision lo recalcula desde el ciphertext
 
   const node = await deps.prisma.node.findFirst({
@@ -193,7 +199,7 @@ async function runProvisionOnce(jobId: string, deps: ProvisionDeps): Promise<voi
       jobId,
       sandboxId: row.id,
       userId: row.userId,
-      tokenSha256: sha256Hex(tokenBytes),
+      tokenSha256: sha256HexOfToken(tokenString),
     }));
   } catch (error) {
     await handleManagerFailure(row.id, jobId, error, deps);
@@ -456,9 +462,8 @@ export async function retryProvision(
   if (!row) throw notFound('Provisión no encontrada');
 
   const newJobId = randomUUID();
-  const tokenBytes = randomBytes(32);
-  const tokenString = tokenBytes.toString('base64url');
-  const tokenSha256 = sha256Hex(tokenBytes);
+  const tokenString = randomBytes(32).toString('base64url');
+  const tokenSha256 = sha256HexOfToken(tokenString);
   void tokenSha256; // runProvision lo recalcula desde el ciphertext
 
   const tokenCiphertext = encryptToken(tokenString, deps.encryptionKey);
