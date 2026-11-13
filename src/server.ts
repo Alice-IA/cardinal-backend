@@ -47,6 +47,102 @@ function isInternalPath(url: string | undefined): boolean {
   return url === '/internal' || url.startsWith('/internal/');
 }
 
+/** Sondas que ejecuta `/readyz`. Inyectables para que los tests no toquen DB/Redis. */
+export interface HealthChecks {
+  db(): Promise<unknown>;
+  redis(): Promise<unknown>;
+}
+
+/**
+ * Timeout por sonda. Las dos corren en paralelo, así que `/readyz` tarda como
+ * mucho esto (2 s), no la suma.
+ */
+const HEALTH_CHECK_TIMEOUT_MS = 2_000;
+
+/**
+ * Ejecuta una sonda con timeout y devuelve true/false. Nunca propaga el error:
+ * un fallo de DB o Redis es un 503, no un 500.
+ *
+ * El error NO se loguea completo a propósito: el mensaje de ioredis incluye la
+ * URL de Redis, que puede llevar credenciales. Solo se registra el nombre de la
+ * sonda y, si existe, un `code` corto.
+ */
+async function runProbe(
+  check: 'db' | 'redis',
+  probe: () => Promise<unknown>,
+  timeoutMs: number = HEALTH_CHECK_TIMEOUT_MS,
+): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      probe(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${check}_timeout`)), timeoutMs);
+      }),
+    ]);
+    return true;
+  } catch (error: unknown) {
+    const rawCode =
+      typeof error === 'object' && error !== null && 'code' in error
+        ? (error as { code: unknown }).code
+        : undefined;
+    logger.warn(
+      { check, code: typeof rawCode === 'string' ? rawCode : undefined },
+      'sonda de readiness falló',
+    );
+    return false;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
+ * Registra `/healthz` y `/readyz` en la app Express.
+ *
+ * - `/healthz`: liveness puro, SIN auth. Docker y Caddy lo llaman sin token y
+ *   no debe depender de DB ni Redis.
+ * - `/readyz`: readiness real (DB + Redis). 503 si cualquiera falla.
+ *
+ * Es idempotente: `app` es un singleton de módulo y `buildHttpServer` se llama
+ * varias veces en tests. Las sondas se leen en cada request, así que una
+ * segunda llamada solo actualiza las dependencias.
+ */
+const healthRoutesRegistered = new WeakSet<object>();
+let activeHealthChecks: HealthChecks | undefined;
+
+function registerHealthRoutes(target: typeof app, checks: HealthChecks): void {
+  activeHealthChecks = checks;
+  if (healthRoutesRegistered.has(target)) return;
+  healthRoutesRegistered.add(target);
+
+  target.get('/healthz', (_request, response) => {
+    response.status(200).json({ ok: true });
+  });
+
+  target.get('/readyz', async (_request, response) => {
+    const current = activeHealthChecks;
+    if (current === undefined) {
+      response.status(503).json({ ok: false, checks: { db: false, redis: false } });
+      return;
+    }
+
+    const [db, redisOk] = await Promise.all([
+      runProbe('db', () => current.db()),
+      runProbe('redis', () => current.redis()),
+    ]);
+    const ok = db && redisOk;
+    response.status(ok ? 200 : 503).json({ ok, checks: { db, redis: redisOk } });
+  });
+}
+
+/** Sondas por defecto cuando no se inyectan (tests que no tocan /readyz). */
+function defaultHealthChecks(): HealthChecks {
+  return {
+    db: () => prisma.$queryRaw`SELECT 1`,
+    redis: () => Promise.reject(new Error('redis no configurado')),
+  };
+}
+
 /**
  * Construye el servidor real (Express + Fastify) sin abrir puerto.
  *
@@ -57,7 +153,12 @@ export async function buildHttpServer(
   ticketDeps: TicketDeps,
   controlPlaneLogger?: FastifyServerOptions['loggerInstance'],
   provisionDeps?: ProvisionDeps,
+  healthChecks: HealthChecks = defaultHealthChecks(),
 ): Promise<BuiltHttpServer> {
+  // Antes de crear el socket: /healthz y /readyz viven en Express y deben
+  // existir antes de que llegue la primera request (y antes del 404 por defecto).
+  registerHealthRoutes(app, healthChecks);
+
   const controlPlane = buildControlPlaneApp(
     controlPlaneLogger
       ? { ticketDeps, provisionDeps, logger: controlPlaneLogger }
@@ -127,7 +228,11 @@ export async function startServer(): Promise<void> {
     systemPrompt,
   };
 
-  const built = await buildHttpServer(ticketDeps, logger, provisionDeps);
+  const built = await buildHttpServer(ticketDeps, logger, provisionDeps, {
+    // Readiness real: la DB y el Redis de producción, no un puerto abierto.
+    db: () => prisma.$queryRaw`SELECT 1`,
+    redis: () => redis.ping(),
+  });
   built.server.listen(env.PORT, () => {
     logger.info({ port: env.PORT, env: env.NODE_ENV }, 'servidor escuchando');
   });
